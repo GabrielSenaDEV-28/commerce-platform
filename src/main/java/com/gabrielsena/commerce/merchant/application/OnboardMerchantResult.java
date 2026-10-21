@@ -6,7 +6,7 @@ public record OnboardMerchantResult(
         UUID merchantId,
         UUID storeId,
         String merchantName,
-        String sotoreName,
+        String storeName,
         String subdomain
 ) {
 }
