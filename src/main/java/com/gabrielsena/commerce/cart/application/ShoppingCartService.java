@@ -50,12 +50,13 @@ public class ShoppingCartService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quantity must be positive.");
         }
         CartIdentity cart = find(store, token, true);
+        requireEditable(store, cart.id());
         List<VariantState> variants = jdbc.query("""
-                SELECT p.active AND v.active AS active, COALESCE(b.quantity, 0) AS stock_quantity
+                SELECT p.active AND v.active AS active, s.quantity AS stock_quantity
                 FROM catalog_product_variants v
                 JOIN catalog_products p ON p.store_id = v.store_id AND p.product_id = v.product_id
-                LEFT JOIN inventory_balances b ON b.store_id = v.store_id AND b.product_id = v.product_id
-                    AND b.variant_id = v.variant_id
+                JOIN inventory_available_stock s ON s.store_id = v.store_id AND s.product_id = v.product_id
+                    AND s.variant_id = v.variant_id
                 WHERE v.store_id = ? AND v.product_id = ? AND v.variant_id = ?
                 """, (rs, row) -> new VariantState(rs.getBoolean("active"), rs.getInt("stock_quantity")),
                 store, product, variant);
@@ -94,6 +95,7 @@ public class ShoppingCartService {
     @Transactional
     public Cart remove(UUID store, String token, UUID product, UUID variant) {
         CartIdentity cart = find(store, token, true);
+        requireEditable(store, cart.id());
         int deleted = jdbc.update("""
                 DELETE FROM shopping_cart_items WHERE store_id = ? AND cart_id = ? AND product_id = ? AND variant_id = ?
                 """, store, cart.id(), product, variant);
@@ -101,6 +103,21 @@ public class ShoppingCartService {
             cart = renew(store, cart.id());
         }
         return read(store, cart);
+    }
+
+    public UUID cartId(UUID store, String token, boolean lock) {
+        return find(store, token, lock).id();
+    }
+
+    private void requireEditable(UUID store, UUID cart) {
+        Boolean active = jdbc.queryForObject("""
+                SELECT EXISTS (SELECT 1 FROM checkout_reservations
+                  WHERE store_id = ? AND cart_id = ? AND cancelled_at IS NULL
+                    AND expires_at > statement_timestamp())
+                """, Boolean.class, store, cart);
+        if (Boolean.TRUE.equals(active)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Cancel checkout before changing the cart.");
+        }
     }
 
     private CartIdentity find(UUID store, String token, boolean lock) {
@@ -135,14 +152,14 @@ public class ShoppingCartService {
     private Cart read(UUID store, CartIdentity cart) {
         List<CartItem> items = jdbc.query("""
                 SELECT i.product_id, i.variant_id, p.name, v.color, v.size, COALESCE(v.price, p.price) AS price,
-                       i.quantity, COALESCE(b.quantity, 0) AS stock_quantity,
-                       p.active AND v.active AND COALESCE(b.quantity, 0) >= i.quantity AS available
+                       i.quantity, s.quantity AS stock_quantity,
+                       p.active AND v.active AND s.quantity >= i.quantity AS available
                 FROM shopping_cart_items i
                 JOIN catalog_products p ON p.store_id = i.store_id AND p.product_id = i.product_id
                 JOIN catalog_product_variants v ON v.store_id = i.store_id AND v.product_id = i.product_id
                     AND v.variant_id = i.variant_id
-                LEFT JOIN inventory_balances b ON b.store_id = i.store_id AND b.product_id = i.product_id
-                    AND b.variant_id = i.variant_id
+                JOIN inventory_available_stock s ON s.store_id = i.store_id AND s.product_id = i.product_id
+                    AND s.variant_id = i.variant_id
                 WHERE i.store_id = ? AND i.cart_id = ? ORDER BY i.product_id, i.variant_id
                 """, (rs, row) -> new CartItem(rs.getObject("product_id", UUID.class),
                 rs.getObject("variant_id", UUID.class), rs.getString("name"), rs.getString("color"),

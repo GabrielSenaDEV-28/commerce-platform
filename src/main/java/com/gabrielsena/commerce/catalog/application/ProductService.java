@@ -14,6 +14,7 @@ import com.gabrielsena.commerce.catalog.domain.ItemType;
 import com.gabrielsena.commerce.catalog.domain.Product;
 import com.gabrielsena.commerce.catalog.domain.ProductHistory;
 import com.gabrielsena.commerce.catalog.domain.ProductVariant;
+import com.gabrielsena.commerce.inventory.application.ReservationGuard;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -35,14 +36,16 @@ public class ProductService {
     private final ProductRepository products;
     private final ProductVariantRepository variants;
     private final ProductHistoryRepository history;
+    private final ReservationGuard reservations;
 
     public ProductService(CatalogStoreResolver stores, ItemTypeRepository types, ProductRepository products,
-                          ProductVariantRepository variants, ProductHistoryRepository history) {
+                          ProductVariantRepository variants, ProductHistoryRepository history, ReservationGuard reservations) {
         this.stores = stores;
         this.types = types;
         this.products = products;
         this.variants = variants;
         this.history = history;
+        this.reservations = reservations;
     }
 
     @Transactional
@@ -108,6 +111,9 @@ public class ProductService {
     public Product setActive(UUID actor, UUID id, boolean active) {
         Product p = lockProduct(id, stores.storeFor(actor));
         if (p.isActive() != active) {
+            if (!active) {
+                reservations.requireUnreserved(p.getStoreId(), p.getId(), null);
+            }
             Instant now = Instant.now();
             p.setActive(active, actor, now);
             change(p, null, actor, now, active ? "REACTIVATED" : "DEACTIVATED", "active", !active, active);
@@ -155,6 +161,9 @@ public class ProductService {
         requireActive(p);
         ProductVariant variant = variant(p, id);
         if (variant.isActive() != active) {
+            if (!active) {
+                reservations.requireUnreserved(p.getStoreId(), p.getId(), id);
+            }
             Instant now = Instant.now();
             variant.setActive(active, actor, now);
             change(p, id, actor, now, active ? "REACTIVATED" : "DEACTIVATED", "active", !active, active);

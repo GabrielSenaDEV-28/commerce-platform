@@ -120,8 +120,8 @@ production exposure requires rate limiting and an abuse-prevention decision.
 
 ### Catalog and planned inventory management
 
-The item-type, product, manual inventory, and inventory audit APIs described
-below are implemented. Inventory reservations, automatic sale deductions,
+The item-type, product, manual inventory, inventory audit and checkout
+reservation APIs described below are implemented. Automatic sale deductions,
 photos, management screens, promotions, and store-member permissions remain
 planned.
 
@@ -271,8 +271,8 @@ new counts but remain readable. Lists accept zero-based `page` and `size`,
 defaulting to 20 with a maximum of 100. Tenant scope is derived from the
 authenticated account, not supplied by the client.
 
-Reservation during checkout, automatic deduction when a sale is completed, and
-reservation expiration or cancellation are not yet implemented.
+Checkout reservations expire or can be cancelled as described below.
+Automatic deduction when a sale is completed is not yet implemented.
 
 The authenticated `GET /api/inventory/products` lists product stock summaries,
 filtered by product status (`active=true` by default, or `active=false`) and
@@ -281,8 +281,7 @@ including an inactive product. Each summary has SKU, name, description, product
 status, `physicalQuantity` and `enabledQuantity`. Physical quantity includes
 all variants, active or inactive. Enabled quantity includes only active
 variants of an active product; it is zero when the product is inactive.
-These are physical balances, not guaranteed sale availability: reservations and
-checkout are not implemented.
+These are physical balances, not the quantity available for new reservations.
 
 `GET /api/inventory/products/{productId}/variants` lists all variants of that
 product with color, size, status, physical quantity, balance version and
@@ -323,7 +322,7 @@ The following GET endpoints do not require authentication:
 - `/api/public/catalog/products/{productId}`: product name, description and
   default price.
 - `/api/public/catalog/products/{productId}/variants`: paginated active
-  variants, including color, size, effective price, exact physical quantity,
+  variants, including color, size, effective price, quantity available for new reservations,
   and whether the quantity is greater than zero.
 
 Only active products with at least one active variant are visible. Inactive
@@ -331,13 +330,13 @@ variants are omitted; active variants with zero stock remain visible and are
 marked unavailable. A missing, inactive or different store's product returns
 `404`. Prices are in BRL. Pagination uses zero-based `page`, with `size`
 defaulting to 20 and limited to 100. Separate requests can reflect different
-moments. Stock and prices are informational; checkout must revalidate them,
-and availability is not guaranteed because reservations are not yet
-implemented. Administrative APIs, history and actor details remain private.
+moments. Stock and prices are informational; checkout revalidates them, and
+availability is not guaranteed until a reservation succeeds. Administrative
+APIs, history and actor details remain private.
 
 The public API has no rate limiting. Production exposure requires an
 abuse-prevention and traffic-limiting decision. The storefront UI, product
-photos and checkout are not implemented.
+photos and checkout screens are not implemented.
 
 #### Anonymous shopping cart API
 
@@ -355,22 +354,26 @@ secure client-side handling and use HTTPS in production.
 using `{"quantity":2}`; retrying the same request does not add the quantity
 again. `DELETE` on the same item path removes it, and deleting an absent item
 is harmless. Each cart holds at most 100 distinct variants. Quantities must be
-positive whole numbers within the current physical stock; unavailable or
+positive whole numbers within the stock currently available for new reservations; unavailable or
 insufficient stock returns `409`, while an unknown variant or cart returns
 `404`. A cart token cannot be used with another store's hostname. The cart
 expires 30 days after creation or its last actual change; reads, unsuccessful
-requests and unchanged retries do not renew it. Expired carts cannot be
+requests and unchanged retries do not renew it. Starting a checkout extends
+cart expiration if needed until at least 30 days after the reservation expires.
+Expired carts cannot be
 accessed; automatic deletion of expired records is not yet implemented.
 
 Items remain visible when product or variant status or stock changes. Each
 item shows the current effective `price`, requested `quantity`, physical
-`stockQuantity` and `available` (active and enough physical stock for the
+`stockQuantity` (physical stock less active reservations) and `available` (active and enough available stock for the
 requested quantity). Prices and stock can change immediately after a response;
-the cart does not reserve stock or guarantee a purchase. It contains no
+the cart does not reserve stock or guarantee a purchase. This availability
+also excludes the same cart's reservation; consult checkout for reserved items.
+It contains no
 customer data. Abuse prevention and rate limiting remain necessary before
 production exposure, including protection against excessive cart creation.
 
-#### Planned live sales and checkout reservations
+#### Checkout reservations and planned live sales
 
 Merchants may share storefront links during live broadcasts, with an expected
 initial scenario of 50–100 people concurrently viewing the same items. The
@@ -379,20 +382,40 @@ are a possible approach, not yet selected or implemented. Client displays
 may lag and must never be treated as an inventory guarantee.
 
 Adding an item to the cart does not reserve it. On choosing to buy, the future
-checkout must atomically validate and reserve available stock on the server
-before collecting customer and payment details. The intended initial
-reservation duration is 20 minutes, with configurability to be considered
-later. Competing checkout requests must not oversell: a request that cannot
-reserve must receive an explicit unavailable result. The backend must enforce
-expiration and release stock independently of the browser and revalidate
-reservation state before order/payment confirmation.
+checkout atomically validates and reserves available stock on the server.
+`POST /api/public/checkout` uses the store hostname and `Cart-Token` to start
+checkout; it returns `ACTIVE`, an ID, expiration and an item list. Each item
+includes the requested quantity, price at checkout, `reserved`, and the
+available quantity observed when checkout began. An item is either fully
+reserved or not reserved at all. If none can be reserved, the response is
+`UNAVAILABLE`, with no ID or expiry, and the cart remains editable. An empty
+cart returns `409`. A repeated start while active returns the same reservation
+and deadline, including the original unavailable items.
+
+Reservations expire 20 minutes after creation according to the database clock.
+They cease consuming stock at expiration without a browser or scheduled job.
+`GET /api/public/checkout` returns the latest checkout with status `ACTIVE`,
+`EXPIRED`, or `CANCELLED`; an absent checkout returns `404`.
+`POST /api/public/checkout/{reservationId}/cancel` releases that active reservation;
+an outdated ID or no active reservation returns `409`. During an active reservation cart changes
+return `409`; cancel first to modify it. Attempts to reduce physical stock below
+active reservations or deactivate a reserved product or variant return `409`.
+Expired and cancelled reservations are retained; cleanup is not implemented.
+Prices in checkout are snapshots for review, not yet a completed sale.
+
+The future UI must warn before cancellation that it releases the reserved
+items and the store cannot guarantee their subsequent availability.
+Competing requests are serialized against inventory and cannot reserve the
+same units twice. Availability can change immediately after a response.
 
 The future checkout UI should show an expiration warning with an OK button
 when the time runs out; pressing it refreshes the page and returns the
 customer to the item page. These are planned behaviors, not implemented
-reservations, payment processing, WebSockets or UI. Multi-item checkout
-navigation, payment-pending expiry and reservation recovery still need design
-before implementation.
+payment processing, order confirmation, sale deductions, WebSockets or UI.
+Reservation duration configuration, multi-item checkout navigation,
+payment-pending expiry, recovery, cleanup and payment/order revalidation still
+need design before implementation. Production also needs abuse prevention and
+rate limiting; no throughput guarantee is established for live traffic.
 
 #### Audit, access, and isolation
 

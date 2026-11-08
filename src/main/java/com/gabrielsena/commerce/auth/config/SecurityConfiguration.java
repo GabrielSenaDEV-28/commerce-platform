@@ -79,6 +79,9 @@ public class SecurityConfiguration {
                         .requestMatchers(HttpMethod.GET, "/api/public/cart").permitAll()
                         .requestMatchers(HttpMethod.PUT, "/api/public/cart/items/{productId}/{variantId}").permitAll()
                         .requestMatchers(HttpMethod.DELETE, "/api/public/cart/items/{productId}/{variantId}").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/public/checkout",
+                                "/api/public/checkout/{reservationId}/cancel").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/public/checkout").permitAll()
                         .anyRequest().authenticated()
                 )
                 .oauth2ResourceServer(resourceServer -> resourceServer.jwt(Customizer.withDefaults()))

@@ -67,11 +67,11 @@ public class PublicCatalogService {
                 """, Long.class, store, productId);
         List<PublicVariant> result = jdbc.query("""
                 SELECT v.variant_id, v.color, v.size, COALESCE(v.price, p.price) AS effective_price,
-                       COALESCE(b.quantity, 0) AS quantity
+                       s.quantity AS quantity
                 FROM catalog_product_variants v
                 JOIN catalog_products p ON p.store_id = v.store_id AND p.product_id = v.product_id
-                LEFT JOIN inventory_balances b ON b.store_id = v.store_id AND b.product_id = v.product_id
-                                                AND b.variant_id = v.variant_id
+                JOIN inventory_available_stock s ON s.store_id = v.store_id AND s.product_id = v.product_id
+                                                AND s.variant_id = v.variant_id
                 WHERE v.store_id = ? AND v.product_id = ? AND v.active = true AND p.active = true
                 ORDER BY v.variant_id LIMIT ? OFFSET ?
                 """, (rs, row) -> {
