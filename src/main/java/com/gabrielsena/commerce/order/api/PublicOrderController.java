@@ -36,7 +36,7 @@ public class PublicOrderController {
         this.customers = customers;
     }
 
-    public record CreateOrderRequest(@NotNull Boolean acceptPartial) { }
+    public record CreateOrderRequest(@NotNull Boolean acceptPartial, @NotNull UUID addressId) { }
 
     @PostMapping("/api/public/checkout/{reservationId}/orders")
     public ResponseEntity<Order> create(HttpServletRequest request,
@@ -44,7 +44,7 @@ public class PublicOrderController {
             @AuthenticationPrincipal Jwt jwt, @PathVariable UUID reservationId, @Valid @RequestBody CreateOrderRequest body) {
         UUID store = stores.resolve(request.getServerName());
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(orders.create(
-                store, token, reservationId, customers.customer(store, jwt), body.acceptPartial()));
+                store, token, reservationId, customers.customer(store, jwt), body.acceptPartial(), body.addressId()));
     }
 
     @GetMapping("/api/public/orders/{orderId}")

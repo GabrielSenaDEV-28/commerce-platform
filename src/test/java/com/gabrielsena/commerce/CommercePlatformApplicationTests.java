@@ -30,6 +30,7 @@ import com.gabrielsena.commerce.cart.application.ShoppingCartService;
 import com.gabrielsena.commerce.checkout.application.CheckoutReservationService;
 import com.gabrielsena.commerce.order.application.OrderService;
 import com.gabrielsena.commerce.customer.application.CustomerAuthService;
+import com.gabrielsena.commerce.customer.application.CustomerProfileService;
 import com.gabrielsena.commerce.inventory.application.InventoryService;
 import com.gabrielsena.commerce.inventory.application.InventoryService.MovementType;
 import com.gabrielsena.commerce.store.StoreRepository;
@@ -140,6 +141,9 @@ class CommercePlatformApplicationTests {
 
 	@Autowired
 	private CustomerAuthService customerAuthService;
+
+	@Autowired
+	private CustomerProfileService customerProfileService;
 
 	@Autowired
 	private JwtEncoder jwtEncoder;
@@ -843,6 +847,102 @@ class CommercePlatformApplicationTests {
 		return storeRepository.findByMerchantId(merchantId).orElseThrow().getSubdomain().getValue() + ".localhost";
 	}
 
+	private UUID deliveryFixture(UUID store, UUID customer) {
+		customerProfileService.updateProfile(store, customer,
+				new CustomerProfileService.ProfileRequest("Ana", "11987654321"));
+		return customerProfileService.create(store, customer, new CustomerProfileService.AddressRequest(
+				"Ana", "01001000", "Rua A", "10", null, "Centro", "Sao Paulo", "SP")).id();
+	}
+
+	@Test
+	void customerAddressesShouldValidateAndEnforceOwnership() throws Exception {
+		CatalogActor actor = catalogActor();
+		CatalogActor otherStore = catalogActor();
+		String host = storefrontHost(actor);
+		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
+		UUID store = storeRepository.findByMerchantId(merchantId).orElseThrow().getId();
+		customerAuthService.register(store, "Ana", "ana@example.com", "a-strong-password");
+		customerAuthService.register(store, "Other", "other@example.com", "a-strong-password");
+		String token = customerAuthService.login(store, "ana@example.com", "a-strong-password").accessToken();
+		String other = customerAuthService.login(store, "other@example.com", "a-strong-password").accessToken();
+		String address = """
+				{"recipient":"Ana","postalCode":"01001000","street":"Rua A","number":"10",
+				 "complement":null,"district":"Centro","city":"Sao Paulo","state":"SP"}
+				""";
+		mockMvc.perform(get("/api/public/customer/profile").with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isUnauthorized());
+		mockMvc.perform(put("/api/public/customer/profile").header("Authorization", "Bearer " + token)
+						.contentType(APPLICATION_JSON).content("{\"name\":\"Ana\",\"phone\":\"123\"}")
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isBadRequest());
+		mockMvc.perform(put("/api/public/customer/profile").header("Authorization", "Bearer " + token)
+						.contentType(APPLICATION_JSON).content("{\"name\":\"Ana Silva\",\"phone\":\"11987654321\"}")
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.email").value("ana@example.com"))
+				.andExpect(jsonPath("$.phone").value("11987654321"));
+		mockMvc.perform(post("/api/public/customer/addresses").header("Authorization", "Bearer " + token)
+						.contentType(APPLICATION_JSON).content(address.replace("01001000", "01001-000"))
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isBadRequest());
+		mockMvc.perform(post("/api/public/customer/addresses").header("Authorization", "Bearer " + token)
+						.contentType(APPLICATION_JSON).content(address.replace("\"SP\"", "\"XX\""))
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isBadRequest());
+		String created = mockMvc.perform(post("/api/public/customer/addresses").header("Authorization", "Bearer " + token)
+						.contentType(APPLICATION_JSON).content(address).with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isCreated()).andExpect(jsonPath("$.country").value("BR"))
+				.andExpect(r -> assertEquals("no-store", r.getResponse().getHeader("Cache-Control")))
+				.andReturn().getResponse().getContentAsString();
+		String id = JsonPath.read(created, "$.id");
+		mockMvc.perform(get("/api/public/customer/addresses/{id}", id).header("Authorization", "Bearer " + other)
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(delete("/api/public/customer/addresses/{id}", id).header("Authorization", "Bearer " + other)
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get("/api/public/customer/addresses").header("Authorization", "Bearer " + token)
+						.with(r -> { r.setServerName(storefrontHost(otherStore)); return r; }))
+				.andExpect(status().isForbidden());
+		mockMvc.perform(get("/api/public/customer/addresses").header("Authorization", "Bearer " + actor.token())
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isForbidden());
+		mockMvc.perform(put("/api/public/customer/addresses/{id}", id).header("Authorization", "Bearer " + token)
+						.contentType(APPLICATION_JSON).content(address.replace("Rua A", "Rua B"))
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.street").value("Rua B"));
+		mockMvc.perform(get("/api/public/customer/addresses").header("Authorization", "Bearer " + token)
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+		mockMvc.perform(delete("/api/public/customer/addresses/{id}", id).header("Authorization", "Bearer " + token)
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isNoContent());
+	}
+
+	@Test
+	void customerAddressLimitShouldHoldDuringConcurrentCreation() throws Exception {
+		CatalogActor actor = catalogActor();
+		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
+		UUID store = storeRepository.findByMerchantId(merchantId).orElseThrow().getId();
+		var customer = customerAuthService.register(store, "Ana", "ana@example.com", "a-strong-password");
+		var address = new CustomerProfileService.AddressRequest("Ana", "01001000", "Rua A", "10",
+				null, "Centro", "Sao Paulo", "SP");
+		for (int i = 0; i < 9; i++) {
+			customerProfileService.create(store, customer.id(), address);
+		}
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		try {
+			List<Future<?>> calls = List.of(
+					executor.submit(() -> { start.await(); return customerProfileService.create(store, customer.id(), address); }),
+					executor.submit(() -> { start.await(); return customerProfileService.create(store, customer.id(), address); }));
+			start.countDown();
+			assertOneSuccessOneConflict(calls);
+			assertEquals(10, customerProfileService.addresses(store, customer.id()).size());
+		} finally {
+			executor.shutdownNow();
+		}
+	}
+
 	@Test
 	void customerAuthenticationShouldEnforceStoreAndRotateRefreshTokens() throws Exception {
 		CatalogActor owner = catalogActor();
@@ -948,7 +1048,8 @@ class CommercePlatformApplicationTests {
 		String host = storefrontHost(actor);
 		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
 		UUID store = storeRepository.findByMerchantId(merchantId).orElseThrow().getId();
-		customerAuthService.register(store, "Ana", "ana@example.com", "a-strong-password");
+		var customer = customerAuthService.register(store, "Ana", "ana@example.com", "a-strong-password");
+		UUID addressId = deliveryFixture(store, customer.id());
 		String customerToken = customerAuthService.login(store, "ana@example.com", "a-strong-password").accessToken();
 		customerAuthService.register(store, "Other", "other@example.com", "a-strong-password");
 		String anotherToken = customerAuthService.login(store, "other@example.com", "a-strong-password").accessToken();
@@ -977,7 +1078,7 @@ class CommercePlatformApplicationTests {
 				.andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
 		String reservation = JsonPath.read(checkout, "$.id");
 		String orderPath = "/api/public/checkout/" + reservation + "/orders";
-		String body = "{\"acceptPartial\":true}";
+		String body = "{\"acceptPartial\":true,\"addressId\":\"" + addressId + "\"}";
 		mockMvc.perform(post(orderPath).header("Cart-Token", token).contentType(APPLICATION_JSON)
 						.content(body).with(request -> { request.setServerName(host); return request; }))
 				.andExpect(status().isUnauthorized());
@@ -990,7 +1091,7 @@ class CommercePlatformApplicationTests {
 						.with(request -> { request.setServerName(storefrontHost(other)); return request; }))
 				.andExpect(status().isForbidden());
 		mockMvc.perform(post(orderPath).header("Cart-Token", token).header("Authorization", "Bearer " + customerToken).contentType(APPLICATION_JSON)
-						.content("{\"acceptPartial\":false}")
+						.content("{\"acceptPartial\":false,\"addressId\":\"" + addressId + "\"}")
 						.with(request -> { request.setServerName(host); return request; }))
 				.andExpect(status().isConflict());
 		mockMvc.perform(post(orderPath).header("Cart-Token", token).header("Authorization", "Bearer " + customerToken).contentType(APPLICATION_JSON)
@@ -1041,7 +1142,9 @@ class CommercePlatformApplicationTests {
 		mockMvc.perform(get("/api/orders/{id}", id).header("Authorization", "Bearer " + other.token()))
 				.andExpect(status().isNotFound());
 		mockMvc.perform(get("/api/orders/{id}", id).header("Authorization", "Bearer " + actor.token()))
-				.andExpect(status().isOk()).andExpect(jsonPath("$.customerEmail").value("ana@example.com"));
+				.andExpect(status().isOk()).andExpect(jsonPath("$.customerEmail").value("ana@example.com"))
+				.andExpect(jsonPath("$.delivery.address.street").value("Rua A"))
+				.andExpect(jsonPath("$.delivery.phone").value("11987654321"));
 		mockMvc.perform(get("/api/orders").header("Authorization", "Bearer " + actor.token()).param("size", "1"))
 				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1))
 				.andExpect(jsonPath("$.content[0].total").value(10));
@@ -1053,10 +1156,12 @@ class CommercePlatformApplicationTests {
 		mockMvc.perform(get("/api/public/customer/orders/{id}", id).header("Authorization", "Bearer " + customerToken)
 						.with(request -> { request.setServerName(host); return request; }))
 				.andExpect(status().isOk()).andExpect(jsonPath("$.status").value("CANCELLED"));
+		jdbcTemplate.update("DELETE FROM order_delivery_details WHERE order_id = ?", UUID.fromString(id));
 		jdbcTemplate.update("UPDATE commerce_orders SET customer_id = NULL WHERE order_id = ?", UUID.fromString(id));
 		mockMvc.perform(get("/api/public/orders/{id}", id).header("Cart-Token", token)
 						.with(request -> { request.setServerName(host); return request; }))
-				.andExpect(status().isOk()).andExpect(jsonPath("$.status").value("CANCELLED"));
+				.andExpect(status().isOk()).andExpect(jsonPath("$.status").value("CANCELLED"))
+				.andExpect(jsonPath("$.delivery").doesNotExist());
 		mockMvc.perform(get("/api/public/customer/orders/{id}", id).header("Authorization", "Bearer " + customerToken)
 						.with(request -> { request.setServerName(host); return request; }))
 				.andExpect(status().isNotFound());
@@ -1070,17 +1175,33 @@ class CommercePlatformApplicationTests {
 		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
 		UUID store = storeRepository.findByMerchantId(merchantId).orElseThrow().getId();
 		var customer = customerAuthService.register(store, "Ana", "ana@example.com", "a-strong-password");
+		UUID addressId = deliveryFixture(store, customer.id());
+		var secondCustomer = customerAuthService.register(store, "Other", "other@example.com", "a-strong-password");
+		UUID foreignAddress = deliveryFixture(store, secondCustomer.id());
 		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Delivery", UUID.randomUUID());
 		String token = shoppingCartService.create(store).token();
 		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
 		var first = checkoutReservationService.start(store, token);
-		var order = orderService.create(store, token, first.id(), customer, false);
+		assertEquals(404, assertThrows(ResponseStatusException.class,
+				() -> orderService.create(store, token, first.id(), customer, false, foreignAddress)).getStatusCode().value());
+		jdbcTemplate.update("UPDATE customer_accounts SET phone = NULL WHERE customer_id = ?", customer.id());
+		assertEquals(409, assertThrows(ResponseStatusException.class,
+				() -> orderService.create(store, token, first.id(), customer, false, addressId)).getStatusCode().value());
+		customerProfileService.updateProfile(store, customer.id(), new CustomerProfileService.ProfileRequest("Ana", "11987654321"));
+		var order = orderService.create(store, token, first.id(), customer, false, addressId);
+		customerProfileService.update(store, customer.id(), addressId, new CustomerProfileService.AddressRequest(
+				"Ana", "01001000", "Rua Nova", "10", null, "Centro", "Sao Paulo", "SP"));
+		customerProfileService.delete(store, customer.id(), addressId);
+		assertEquals("Rua A", orderService.ownedOrder(store, customer.id(), order.id()).delivery().address().street());
+		assertEquals("Rua A", orderService.create(store, token, first.id(), customer, false, addressId).delivery().address().street());
+		assertEquals(409, assertThrows(ResponseStatusException.class,
+				() -> orderService.create(store, token, first.id(), customer, false, foreignAddress)).getStatusCode().value());
 		jdbcTemplate.update("""
 				UPDATE checkout_reservations SET created_at = clock_timestamp() - INTERVAL '21 minutes',
 				expires_at = clock_timestamp() - INTERVAL '1 minute' WHERE reservation_id = ?
 				""", first.id());
 		assertEquals("EXPIRED", orderService.ownedOrder(store, customer.id(), order.id()).status());
-		assertEquals("EXPIRED", orderService.create(store, token, first.id(), customer, false).status());
+		assertEquals("EXPIRED", orderService.create(store, token, first.id(), customer, false, addressId).status());
 		jdbcTemplate.update("UPDATE shopping_carts SET expires_at = clock_timestamp() - INTERVAL '1 second' WHERE token_hash = ?",
 				TokenService.hashToken(token));
 		assertEquals("EXPIRED", orderService.ownedOrder(store, customer.id(), order.id()).status());
@@ -1090,14 +1211,14 @@ class CommercePlatformApplicationTests {
 		assertNotEquals(first.id(), second.id());
 		checkoutReservationService.cancel(store, token, second.id());
 		assertEquals(409, assertThrows(ResponseStatusException.class, () -> orderService.create(
-				store, token, second.id(), customer, false)).getStatusCode().value());
+				store, token, second.id(), customer, false, addressId)).getStatusCode().value());
 		var third = checkoutReservationService.start(store, token);
 		jdbcTemplate.update("""
 				UPDATE checkout_reservations SET created_at = clock_timestamp() - INTERVAL '21 minutes',
 				expires_at = clock_timestamp() - INTERVAL '1 minute' WHERE reservation_id = ?
 				""", third.id());
 		assertEquals(409, assertThrows(ResponseStatusException.class, () -> orderService.create(
-				store, token, third.id(), customer, false)).getStatusCode().value());
+				store, token, third.id(), customer, false, addressId)).getStatusCode().value());
 		assertEquals(0, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM commerce_orders WHERE reservation_id = ?",
 				Integer.class, third.id()));
 		assertEquals(1, inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId()).quantity());
@@ -1110,6 +1231,7 @@ class CommercePlatformApplicationTests {
 		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
 		UUID store = storeRepository.findByMerchantId(merchantId).orElseThrow().getId();
 		var customer = customerAuthService.register(store, "Ana", "ana@example.com", "a-strong-password");
+		UUID addressId = deliveryFixture(store, customer.id());
 		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Delivery", UUID.randomUUID());
 		String token = shoppingCartService.create(store).token();
 		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
@@ -1118,8 +1240,8 @@ class CommercePlatformApplicationTests {
 		ExecutorService executor = Executors.newFixedThreadPool(2);
 		try {
 			List<Future<OrderService.Order>> calls = List.of(
-					executor.submit(() -> { start.await(); return orderService.create(store, token, checkout.id(), customer, false); }),
-					executor.submit(() -> { start.await(); return orderService.create(store, token, checkout.id(), customer, false); }));
+					executor.submit(() -> { start.await(); return orderService.create(store, token, checkout.id(), customer, false, addressId); }),
+					executor.submit(() -> { start.await(); return orderService.create(store, token, checkout.id(), customer, false, addressId); }));
 			start.countDown();
 			assertEquals(calls.getFirst().get(30, TimeUnit.SECONDS).id(), calls.getLast().get(30, TimeUnit.SECONDS).id());
 			assertEquals(1, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM commerce_orders WHERE reservation_id = ?",
@@ -1136,6 +1258,7 @@ class CommercePlatformApplicationTests {
 		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
 		UUID store = storeRepository.findByMerchantId(merchantId).orElseThrow().getId();
 		var customer = customerAuthService.register(store, "Ana", "ana@example.com", "a-strong-password");
+		UUID addressId = deliveryFixture(store, customer.id());
 		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Delivery", UUID.randomUUID());
 		String token = shoppingCartService.create(store).token();
 		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
@@ -1144,7 +1267,7 @@ class CommercePlatformApplicationTests {
 		ExecutorService executor = Executors.newFixedThreadPool(2);
 		try {
 			Future<OrderService.Order> order = executor.submit(() -> {
-				start.await(); return orderService.create(store, token, checkout.id(), customer, false);
+				start.await(); return orderService.create(store, token, checkout.id(), customer, false, addressId);
 			});
 			Future<?> cancel = executor.submit(() -> {
 				start.await(); return checkoutReservationService.cancel(store, token, checkout.id());
