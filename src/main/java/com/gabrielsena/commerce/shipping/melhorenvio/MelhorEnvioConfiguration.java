@@ -21,4 +21,19 @@ public class MelhorEnvioConfiguration {
                 .requestFactory(factory).build();
         return new MelhorEnvioClient(client, userAgent);
     }
+
+    @Bean
+    MelhorEnvioOAuthClient melhorEnvioOAuthClient(
+            @Value("${shipping.melhor-envio.client-id:}") String clientId,
+            @Value("${shipping.melhor-envio.client-secret:}") String clientSecret,
+            @Value("${shipping.melhor-envio.redirect-uri:}") String redirectUri,
+            @Value("${shipping.melhor-envio.user-agent:}") String userAgent) {
+        HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
+                .followRedirects(HttpClient.Redirect.NEVER).build();
+        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(http);
+        factory.setReadTimeout(Duration.ofSeconds(10));
+        RestClient client = RestClient.builder().baseUrl("https://sandbox.melhorenvio.com.br")
+                .requestFactory(factory).build();
+        return new MelhorEnvioOAuthClient(client, clientId, clientSecret, redirectUri, userAgent);
+    }
 }

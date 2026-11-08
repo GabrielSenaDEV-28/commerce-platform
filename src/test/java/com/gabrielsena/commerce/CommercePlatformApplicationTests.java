@@ -17,6 +17,7 @@ import com.gabrielsena.commerce.auth.application.TokenService;
 import com.gabrielsena.commerce.auth.domain.MerchantAccount;
 import com.gabrielsena.commerce.catalog.ItemTypeNameInUseException;
 import com.gabrielsena.commerce.catalog.CatalogConflictException;
+import com.gabrielsena.commerce.catalog.CatalogStoreResolver;
 import com.gabrielsena.commerce.catalog.ItemTypeNotFoundException;
 import com.gabrielsena.commerce.catalog.application.ItemTypeService;
 import com.gabrielsena.commerce.catalog.application.ProductService;
@@ -38,6 +39,9 @@ import com.gabrielsena.commerce.store.PublicStoreResolver;
 import com.gabrielsena.commerce.store.domain.Store;
 import com.gabrielsena.commerce.store.domain.Subdomain;
 import com.gabrielsena.commerce.store.application.StoreShippingSettingsService;
+import com.gabrielsena.commerce.shipping.melhorenvio.MelhorEnvioOAuthClient;
+import com.gabrielsena.commerce.shipping.melhorenvio.MelhorEnvioOAuthService;
+import com.gabrielsena.commerce.shipping.melhorenvio.MelhorEnvioException;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
@@ -55,6 +59,8 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.server.ResponseStatusException;
 import org.testcontainers.containers.PostgreSQLContainer;
 
@@ -75,12 +81,16 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 import static org.hamcrest.Matchers.hasItem;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -152,6 +162,12 @@ class CommercePlatformApplicationTests {
 	private StoreShippingSettingsService storeShippingSettingsService;
 
 	@Autowired
+	private CatalogStoreResolver catalogStoreResolver;
+
+	@Autowired
+	private PlatformTransactionManager transactionManager;
+
+	@Autowired
 	private JwtEncoder jwtEncoder;
 
 	@Autowired
@@ -185,6 +201,11 @@ class CommercePlatformApplicationTests {
 	@DynamicPropertySource
 	static void configureDatabase(DynamicPropertyRegistry registry) {
 		registry.add("security.jwt.secret", () -> TEST_JWT_SECRET);
+		registry.add("shipping.melhor-envio.client-id", () -> "test-client");
+		registry.add("shipping.melhor-envio.client-secret", () -> "test-secret");
+		registry.add("shipping.melhor-envio.user-agent", () -> "Commerce (support@example.test)");
+		registry.add("shipping.melhor-envio.redirect-uri", () -> "https://panel.example.test/api/public/integrations/melhor-envio/callback");
+		registry.add("shipping.melhor-envio.encryption-key", () -> Base64.getEncoder().encodeToString(new byte[32]));
 		if (POSTGRES != null) {
 			registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
 			registry.add("spring.datasource.username", POSTGRES::getUsername);
@@ -214,6 +235,132 @@ class CommercePlatformApplicationTests {
 
 	@Test
 	void contextLoads() {
+	}
+
+	@Test
+	void melhorEnvioOAuthShouldBindBrowserStoreAndRotateEncryptedTokens() {
+		CatalogActor actor = catalogActor();
+		CatalogActor other = catalogActor();
+		UUID store = catalogStoreResolver.storeFor(actor.id());
+		MelhorEnvioOAuthClient provider = mock(MelhorEnvioOAuthClient.class);
+		var tokens = mock(MelhorEnvioOAuthClient.Tokens.class);
+		when(tokens.accessToken()).thenReturn("access-one", "access-two");
+		when(tokens.refreshToken()).thenReturn("refresh-one", "refresh-two");
+		when(tokens.expiresIn()).thenReturn(1L, 3600L);
+		when(provider.exchange("code")).thenReturn(tokens);
+		when(provider.refresh("refresh-one")).thenReturn(tokens);
+		String key = Base64.getEncoder().encodeToString(new byte[32]);
+		var service = new MelhorEnvioOAuthService(jdbcTemplate, transactionManager,
+				catalogStoreResolver, provider, "client",
+				"https://panel.example.test/api/public/integrations/melhor-envio/callback", key);
+		var start = service.start(actor.id(), "panel.example.test");
+		String state = UriComponentsBuilder.fromUriString(start.authorizationUrl()).build().getQueryParams().getFirst("state");
+		assertNotNull(state);
+		assertEquals("PENDING", service.status(actor.id()));
+		assertEquals("DISCONNECTED", service.status(other.id()));
+		assertThrows(IllegalArgumentException.class, () -> service.complete(state, "wrong-browser", "code", null));
+		service.complete(state, start.browserSecret(), "code", null);
+		assertEquals("CONNECTED", service.status(actor.id()));
+		assertThrows(IllegalArgumentException.class, () -> service.complete(state, start.browserSecret(), "code", null));
+		byte[] stored = jdbcTemplate.queryForObject("SELECT access_token FROM melhor_envio_connections WHERE store_id = ?", byte[].class, store);
+		assertFalse(new String(stored, StandardCharsets.ISO_8859_1).contains("access-one"));
+		assertEquals("access-two", service.accessToken(store));
+		verify(provider).refresh("refresh-one");
+		assertEquals("access-two", service.accessToken(store));
+		service.disconnect(actor.id());
+		assertEquals("DISCONNECTED", service.status(actor.id()));
+		assertThrows(MelhorEnvioException.class, () -> service.accessToken(store));
+	}
+
+	@Test
+	void melhorEnvioOAuthEndpointsShouldRequireMerchantAndProtectCallback() throws Exception {
+		CatalogActor actor = catalogActor();
+		UUID store = catalogStoreResolver.storeFor(actor.id());
+		customerAuthService.register(store, "Ana", "ana@example.com", "a-strong-password");
+		String customer = customerAuthService.login(store, "ana@example.com", "a-strong-password").accessToken();
+		String connect = "/api/integrations/melhor-envio/connect";
+		mockMvc.perform(post(connect)).andExpect(status().isUnauthorized());
+		mockMvc.perform(post(connect).header("Authorization", "Bearer " + customer)).andExpect(status().isForbidden());
+		mockMvc.perform(post(connect).header("Authorization", "Bearer " + actor.token()))
+				.andExpect(status().isBadRequest());
+		mockMvc.perform(post(connect).header("Authorization", "Bearer " + actor.token())
+						.with(r -> { r.setServerName("panel.example.test"); r.setSecure(true); return r; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.authorizationUrl").exists())
+				.andExpect(r -> assertTrue(r.getResponse().getHeader("Set-Cookie").contains("__Host-me-oauth=")))
+				.andExpect(r -> assertTrue(r.getResponse().getHeader("Set-Cookie").contains("Secure")))
+				.andExpect(r -> assertTrue(r.getResponse().getHeader("Set-Cookie").contains("HttpOnly")))
+				.andExpect(r -> assertTrue(r.getResponse().getHeader("Set-Cookie").contains("SameSite=Lax")))
+				.andExpect(r -> assertEquals("no-store", r.getResponse().getHeader("Cache-Control")));
+		mockMvc.perform(get("/api/integrations/melhor-envio").header("Authorization", "Bearer " + actor.token()))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.status").value("PENDING"));
+		mockMvc.perform(get("/api/public/integrations/melhor-envio/callback").param("state", "invalid").param("code", "code"))
+				.andExpect(status().isBadRequest())
+				.andExpect(r -> assertEquals("no-referrer", r.getResponse().getHeader("Referrer-Policy")))
+				.andExpect(r -> assertEquals("no-store", r.getResponse().getHeader("Cache-Control")));
+		mockMvc.perform(delete("/api/integrations/melhor-envio").header("Authorization", "Bearer " + actor.token()))
+				.andExpect(status().isNoContent());
+	}
+
+	@Test
+	void melhorEnvioRefreshShouldRejectConcurrentRefreshAndDisconnect() throws Exception {
+		CatalogActor actor = catalogActor();
+		UUID store = catalogStoreResolver.storeFor(actor.id());
+		MelhorEnvioOAuthClient provider = mock(MelhorEnvioOAuthClient.class);
+		var tokens = mock(MelhorEnvioOAuthClient.Tokens.class);
+		when(tokens.accessToken()).thenReturn("access");
+		when(tokens.refreshToken()).thenReturn("refresh");
+		when(tokens.expiresIn()).thenReturn(1L);
+		when(provider.exchange("code")).thenReturn(tokens);
+		CountDownLatch entered = new CountDownLatch(1);
+		CountDownLatch finish = new CountDownLatch(1);
+		when(provider.refresh("refresh")).thenAnswer(invocation -> {
+			entered.countDown();
+			if (!finish.await(10, TimeUnit.SECONDS)) {
+				throw new IllegalStateException("Refresh did not resume.");
+			}
+
+			return tokens;
+		});
+		var service = new MelhorEnvioOAuthService(jdbcTemplate, transactionManager, catalogStoreResolver,
+				provider, "client", "https://panel.example.test/api/public/integrations/melhor-envio/callback",
+				Base64.getEncoder().encodeToString(new byte[32]));
+		var start = service.start(actor.id(), "panel.example.test");
+		String state = UriComponentsBuilder.fromUriString(start.authorizationUrl()).build().getQueryParams().getFirst("state");
+		service.complete(state, start.browserSecret(), "code", null);
+		ExecutorService executor = Executors.newSingleThreadExecutor();
+		try {
+			Future<String> refresh = executor.submit(() -> service.accessToken(store));
+			assertTrue(entered.await(10, TimeUnit.SECONDS));
+			assertEquals(MelhorEnvioException.Reason.UNAVAILABLE,
+					assertThrows(MelhorEnvioException.class, () -> service.accessToken(store)).reason());
+			service.disconnect(actor.id());
+			finish.countDown();
+			assertInstanceOf(MelhorEnvioException.class, assertThrows(ExecutionException.class,
+					() -> refresh.get(10, TimeUnit.SECONDS)).getCause());
+			assertEquals("DISCONNECTED", service.status(actor.id()));
+		} finally {
+			finish.countDown();
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
+	void melhorEnvioOAuthShouldRejectExpiredAndSupersededStates() {
+		CatalogActor actor = catalogActor();
+		UUID store = catalogStoreResolver.storeFor(actor.id());
+		MelhorEnvioOAuthClient provider = mock(MelhorEnvioOAuthClient.class);
+		var service = new MelhorEnvioOAuthService(jdbcTemplate, transactionManager, catalogStoreResolver,
+				provider, "client", "https://panel.example.test/api/public/integrations/melhor-envio/callback",
+				Base64.getEncoder().encodeToString(new byte[32]));
+		var old = service.start(actor.id(), "panel.example.test");
+		String oldState = UriComponentsBuilder.fromUriString(old.authorizationUrl()).build().getQueryParams().getFirst("state");
+		var current = service.start(actor.id(), "panel.example.test");
+		String currentState = UriComponentsBuilder.fromUriString(current.authorizationUrl()).build().getQueryParams().getFirst("state");
+		assertThrows(IllegalArgumentException.class, () -> service.complete(oldState, old.browserSecret(), "code", null));
+		jdbcTemplate.update("UPDATE melhor_envio_connections SET state_expires_at = clock_timestamp() - INTERVAL '1 second' WHERE store_id = ?", store);
+		assertEquals("REAUTHORIZE", service.status(actor.id()));
+		assertThrows(IllegalArgumentException.class, () -> service.complete(currentState, current.browserSecret(), "code", null));
+		assertThrows(MelhorEnvioException.class, () -> service.start(actor.id(), "other.example.test"));
 	}
 
 	@Test
