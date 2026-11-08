@@ -32,6 +32,10 @@ and track purchases.
 Provide a multi-tenant e-commerce SaaS where merchants can operate independent
 online stores through a shared platform.
 
+The initial catalog focuses on clothing and also supports footwear. Merchants
+configure the types and variations relevant to their products rather than
+relying on a fixed platform-wide list.
+
 Each store can manage its own catalog, inventory, customers, orders, payments,
 and fulfillment while remaining logically isolated from other stores using
 the platform.
@@ -114,6 +118,62 @@ stable identifier.
 Registration and authentication endpoints are public. They can be abused;
 production exposure requires rate limiting and an abuse-prevention decision.
 
+### Planned catalog and inventory management
+
+The following requirements describe planned functionality; the catalog,
+inventory management, management screens, and store-member permissions are not
+implemented yet.
+
+#### Item types and variants
+
+A merchant can create, view, update, and delete item types within their store.
+An item type has a name, such as `Camiseta`, `Calça`, or `Tênis`, and defines
+which variant attributes its products use, such as color and size. For size,
+the merchant can choose a numeric or letter-based format. Numeric sizes support
+footwear, while letter-based sizes support values such as `PP`, `P`, `M`, and
+`G` for clothing. These are examples, not fixed platform-wide lists.
+
+The behavior of editing or deleting a type already used by products must be
+defined before implementation so existing products and their inventory remain
+consistent.
+
+#### Products and stock
+
+A merchant can add and manage a product in their store by providing its SKU,
+description, item type, available colors and sizes when applicable, and a
+photo. Each product has one SKU, unique within its store; different stores may
+use the same SKU. All variants of a product share that SKU.
+
+The merchant selects only the combinations actually sold, rather than
+automatically creating every possible combination. Each combination has its own
+internal identifier, so its inventory can be managed separately even though the
+SKU is shared. For example, a shirt may have `preta / P` and `amarela / M`
+variants without requiring every other color-and-size combination.
+
+The merchant can add and manage stock for a selected variant. The management
+screen lists products with their SKU, photo, description, and total available
+stock, and lets the merchant inspect the available stock for each variant. For
+example, a product with three `preta / P` units and four `amarela / M` units
+has seven available units in total.
+
+Product pricing, photo storage and management, and detailed stock adjustment
+rules require decisions before implementation.
+
+#### Audit, access, and isolation
+
+Item types, products, variants, and stock records need creation and latest
+update timestamps and actor attribution where applicable. Changes must be
+traceable through a history identifying who changed what and when, including
+stock adjustments. Audit data must not expose passwords, tokens, or other
+secrets.
+
+In the future, a merchant can create accounts for sales staff and assign
+different permissions. The eventual authorization policy must check the
+authenticated actor's permissions on the backend, not rely on the client.
+Products, item types, variants, stock, and their history belong to a store:
+every relevant read and write must enforce that store boundary. Lists that can
+grow must support pagination.
+
 ## 5. Initial Scope
 
 The first version will focus on the minimum end-to-end commerce flow required
@@ -125,7 +185,9 @@ It includes:
 - Platform-provided store subdomain.
 - Merchant local email/password login.
 - Product and variant management.
+- Store-configured item types and variant attributes.
 - Inventory management.
+- Catalog and inventory change history.
 - Product catalog browsing.
 - Shopping cart.
 - Checkout with temporary inventory reservation.
@@ -156,7 +218,7 @@ Potential future capabilities include:
 - Custom domain connection.
 - Payment provider integrations, including PIX and credit cards.
 - Shipping carrier integrations and shipment tracking.
-- Authorization and store member management.
+- Granular authorization, sales staff accounts, and store member management.
 - External identity providers, including Google, and email verification.
 - Advanced storefront customization.
 - Discounts, coupons, and promotional campaigns.
