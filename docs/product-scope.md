@@ -250,13 +250,51 @@ It sends origin and destination postal codes and unit product data, rounding
 each dimension up to whole centimeters without changing the catalog. It uses
 the provider's customized price and delivery time and retains Correios
 services. Provider failures and individual unavailable services are distinct;
-the client is not yet connected to an endpoint or a merchant authorization
-flow. Configure `MELHOR_ENVIO_USER_AGENT` as the application name and a
-technical contact email before use. Tokens are supplied per call, not stored
-or logged by this client. OAuth, token storage, checkout quotes and validation
-against a real sandbox account remain future work.
+the quotation client is not yet connected to an endpoint or checkout.
+The planned OAuth development uses simulated provider responses first; creating
+the sandbox account and application and validating authorization and quotation
+against the real sandbox are deferred until later in the same development
+branch. Do not treat simulated responses as real sandbox validation.
 Provider contract reference:
 [Melhor Envio freight calculation](https://docs.melhorenvio.com.br/reference/calculo-de-fretes-por-produtos).
+
+The sandbox OAuth API provides authenticated
+`POST /api/integrations/melhor-envio/connect`, `GET /api/integrations/melhor-envio`
+and `DELETE /api/integrations/melhor-envio`. Start returns an authorization URL
+and sets a temporary HTTPS-only, HttpOnly, SameSite=Lax cookie. The browser
+must open the URL and return to the same panel hostname. The callback is
+`GET /api/public/integrations/melhor-envio/callback`, with a one-time state
+valid for ten minutes and bound to the browser cookie and store. Only the
+`shipping-calculate` scope is requested. Status is `DISCONNECTED`, `PENDING`,
+`CONNECTED`, `REFRESHING` or `REAUTHORIZE`; an expired authorization attempt
+is reported as `REAUTHORIZE`.
+
+Configure `MELHOR_ENVIO_CLIENT_ID`, `MELHOR_ENVIO_CLIENT_SECRET`,
+`MELHOR_ENVIO_USER_AGENT` (application name and technical contact email),
+`MELHOR_ENVIO_REDIRECT_URI` (the exact HTTPS callback URL registered with the
+provider), and `MELHOR_ENVIO_ENCRYPTION_KEY` (Base64-encoded random 32-byte
+key) in the server's secret configuration. Keep secrets out of the repository,
+logs and client responses. Keep the encryption key stable and back it up
+securely: losing or changing it makes stored tokens unreadable. The callback
+hostname must match the panel hostname that initiates the request. Configure
+HTTPS end-to-end or explicitly configure a trusted reverse proxy so the
+application recognizes HTTPS; forwarded headers must never be accepted from
+untrusted clients.
+Configure
+reverse proxies and access logs not to record callback query parameters,
+authorization codes, cookies or tokens; the callback sends no-store and
+no-referrer headers.
+
+Tokens are encrypted with AES-GCM and bound to the store. A refresh is claimed
+before contacting the provider, preventing simultaneous reuse of the refresh
+token; concurrent requests fail temporarily. If a refresh outcome is
+uncertain, the store must reconnect rather than retrying a possibly consumed
+token. An interrupted process can leave status `REFRESHING`; disconnect and
+reconnect to recover. Disconnect removes local credentials but does not revoke
+the application at Melhor Envio. Starting a new connection replaces any
+existing local connection. The integration does not yet invoke this token
+service for quotations and cannot validate the real provider until the sandbox
+application is configured.
 
 #### Inventory
 
