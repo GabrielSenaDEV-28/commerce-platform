@@ -72,7 +72,7 @@ browse the catalog, purchase products, and follow the lifecycle of their orders.
    expires before completion, the reserved inventory becomes available again.
 
 9. During checkout, the customer provides the required information, selects a
-   shipping option and chooses a payment method.
+   fulfillment option and chooses a payment method.
 
 10. When checkout is completed, an order is created preserving the commercial
     conditions of the purchase, including item prices, quantities, shipping cost
@@ -223,13 +223,14 @@ For example, `POST /api/products` accepts:
 #### Shipping preparation
 
 The merchant can configure one Brazilian address for both shipping origin and
-future pickup via authenticated `GET` and `PUT /api/store/shipping-settings`.
+pickup via authenticated `GET` and `PUT /api/store/shipping-settings`.
 GET returns `404` until configured. PUT replaces the settings and accepts
 `postalCode` (eight digits), `street`, `number`, optional `complement`,
 `district`, `city`, `state` (a Brazilian UF), `pickupEnabled` (boolean) and
 optional `pickupInstructions` (up to 1,000 characters). The address is
-validated for format only, not verified externally. Settings are scoped to
-the authenticated merchant's store and are not public.
+validated for format only, not verified externally. Management is scoped to
+the authenticated merchant's store. When pickup is enabled, its address and
+instructions are public through the pickup endpoint below.
 
 After creating a variant, the merchant can set all its shipping measurements
 with `PUT /api/products/{productId}/variants/{variantId}/shipping`, for example
@@ -241,10 +242,8 @@ and dimensions up to two. The variant response includes these values under
 measurements until configured. Updates are recorded in product history.
 Missing measurements will prevent shipping quotes when quoting is implemented.
 
-These settings do not yet enable shipping quotes or pickup orders. The planned
-pickup option is free, enabled per store and uses the same address as the
-shipping origin; pickup orders will not require a customer delivery address.
-Carrier integration and checkout changes remain future work.
+Pickup is free and uses the same address as the shipping origin. Shipping
+quotes and carrier integration remain future work.
 
 #### Inventory
 
@@ -457,20 +456,46 @@ access token, and the `Cart-Token` header, with a JSON body such as:
 
 The order records the authenticated customer's name, email and phone at
 creation, together with a snapshot of the selected saved delivery address.
-An address owned by that customer and a profile phone are required for new
-orders. Existing orders without delivery details remain readable.
+A customer-owned address is required for delivery. A profile phone is required
+for either delivery or pickup. Existing orders without delivery details remain
+readable. Omitting `fulfillmentType` retains the existing delivery behavior;
+`"DELIVERY"` can also be supplied explicitly.
+
+The public `GET /api/public/pickup` uses the storefront hostname and returns
+`available: false` when pickup is disabled or not configured. When enabled it
+returns `available: true`, the store's `address` and optional `instructions`.
+The response uses `Cache-Control: no-store`; availability and address can
+change before order creation.
+
+For pickup, send:
+
+```json
+{"acceptPartial":false,"fulfillmentType":"PICKUP"}
+```
+
+Do not supply `addressId` for pickup. The server verifies that the store has
+enabled pickup, otherwise returns `409`. A delivery request without an
+`addressId`, a pickup request with one, or an unknown fulfillment type returns
+`400`. The order preserves the pickup address, instructions and customer phone
+as they were at creation. Its `pickup.cost` is zero, `delivery` is null and
+`fulfillmentType` is `PICKUP`. Delivery orders have `fulfillmentType` set to
+`DELIVERY` and `pickup` null. Both customer and merchant order details contain
+the snapshot; their order lists include the fulfillment type. Historical orders
+are treated as delivery orders, including legacy orders lacking delivery details.
+
 If any checkout item was unavailable,
 `acceptPartial` must explicitly be `true`; only fully reserved items enter the
 order. Otherwise `false` is sufficient. The response is `200` with the order,
 including the checkout price and quantity and a snapshot of product name and
 variant attributes. `total` is the sum of item prices and quantities in BRL;
-it excludes shipping, which has not been implemented. Prices are captured
+pickup adds no charge; shipping calculation has not been implemented. Prices are captured
 from checkout; names and variant attributes are captured at order creation.
 
 There is at most one order per reservation. A repeat by the same customer with
-the same `acceptPartial` and `addressId` returns the original order, even if
-the address has since been edited or deleted, including after its
-expiration or cancellation. A different customer or confirmation value, or
+the same `acceptPartial`, fulfillment type and `addressId` (for delivery)
+returns the original order, even if the address or pickup settings have since
+changed, including after its expiration or cancellation. A different customer,
+confirmation value or fulfillment selection, or
 an inactive reservation without an order, returns `409`. No request extends the reservation. The order
 is `PENDING` only while the reservation is active, becomes `EXPIRED` when the
 deadline passes, and becomes `CANCELLED` when checkout is cancelled. Status is
@@ -500,6 +525,23 @@ expiration, asynchronous confirmation, secure webhooks, idempotency, and
 atomic reservation-to-sale conversion require a separate design. Do not store
 card numbers or security codes in this application. Without those capabilities,
 pending orders cannot be paid or fulfilled.
+
+#### Planned fulfillment status
+
+Only confirmed payment should start fulfillment. The intended flow records
+payment confirmation automatically and then moves the order to preparing.
+For shipped orders, the merchant manually marks the order as shipped; a
+future Correios tracking integration should update it to delivered when a
+confirmed delivery event is received. The provider, access conditions, event
+mapping, authentication and handling of delayed, duplicated, missing or
+exception events still require design and validation. Automatic delivery
+updates are not implemented.
+
+For store pickup, the planned sequence is preparing, ready for pickup, and
+picked up. The merchant manually advances it after payment confirmation.
+These are future fulfillment states, distinct from the current reservation-
+derived pending, expired and cancelled order status. No payment confirmation,
+manual fulfillment transitions or tracking integration is available yet.
 
 #### Customer accounts
 
