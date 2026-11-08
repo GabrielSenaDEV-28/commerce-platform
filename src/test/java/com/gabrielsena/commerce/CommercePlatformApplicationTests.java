@@ -23,6 +23,7 @@ import com.gabrielsena.commerce.catalog.application.ItemTypeService;
 import com.gabrielsena.commerce.catalog.application.ProductService;
 import com.gabrielsena.commerce.catalog.api.ProductRequest;
 import com.gabrielsena.commerce.catalog.api.VariantRequest;
+import com.gabrielsena.commerce.catalog.api.VariantShippingRequest;
 import com.gabrielsena.commerce.catalog.domain.ItemType;
 import com.gabrielsena.commerce.catalog.domain.ItemTypeValues;
 import com.gabrielsena.commerce.catalog.domain.Product;
@@ -42,6 +43,9 @@ import com.gabrielsena.commerce.store.application.StoreShippingSettingsService;
 import com.gabrielsena.commerce.shipping.melhorenvio.MelhorEnvioOAuthClient;
 import com.gabrielsena.commerce.shipping.melhorenvio.MelhorEnvioOAuthService;
 import com.gabrielsena.commerce.shipping.melhorenvio.MelhorEnvioException;
+import com.gabrielsena.commerce.shipping.melhorenvio.MelhorEnvioClient;
+import com.gabrielsena.commerce.shipping.application.ShippingEstimateService;
+import com.gabrielsena.commerce.shipping.api.ShippingEstimateController;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
@@ -59,6 +63,8 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.server.ResponseStatusException;
@@ -91,6 +97,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.hamcrest.Matchers.hasItem;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -235,6 +244,171 @@ class CommercePlatformApplicationTests {
 
 	@Test
 	void contextLoads() {
+	}
+
+	@Test
+	void shippingEstimatesShouldUseOnlyStoreDataAndRejectInvalidItems() throws Exception {
+		CatalogActor actor = catalogActor();
+		CatalogActor other = catalogActor();
+		UUID store = catalogStoreResolver.storeFor(actor.id());
+		UUID otherStore = catalogStoreResolver.storeFor(other.id());
+		InventoryFixture fixture = inventoryFixture(actor);
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 5, "Stock", UUID.randomUUID());
+		productService.updateVariantShipping(actor.id(), fixture.productId(), fixture.variantId(),
+				new VariantShippingRequest(new BigDecimal("0.125"), new BigDecimal("10.25"),
+						new BigDecimal("3"), new BigDecimal("20")));
+		storeShippingSettingsService.update(actor.id(), new StoreShippingSettingsService.Settings(
+				"01001000", "Rua A", "10", null, "Centro", "Sao Paulo", "SP", false, null));
+		var auth = mock(MelhorEnvioOAuthService.class);
+		var provider = mock(MelhorEnvioClient.class);
+		when(auth.accessToken(store)).thenReturn("store-token");
+		var response = new MelhorEnvioClient.QuoteResult(
+				List.of(new MelhorEnvioClient.ServiceQuote(1, "PAC", new BigDecimal("12.34"), 5)), List.of());
+		when(provider.quote(eq("store-token"), any())).thenReturn(response);
+		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, auth, provider);
+		MockMvc api = MockMvcBuilders.standaloneSetup(new ShippingEstimateController(
+				new PublicStoreResolver(storeRepository, "localhost"), service)).build();
+		String host = storefrontHost(actor);
+		String productPath = "/api/public/catalog/products/" + fixture.productId() + "/variants/" + fixture.variantId() + "/shipping-estimates";
+		api.perform(post(productPath).contentType(APPLICATION_JSON).content("{\"postalCode\":\"96020360\",\"quantity\":2,\"price\":0}")
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.quotes[0].price").value(12.34))
+				.andExpect(r -> assertEquals("no-store", r.getResponse().getHeader("Cache-Control")));
+		ArgumentCaptor<MelhorEnvioClient.QuoteRequest> request = ArgumentCaptor.forClass(MelhorEnvioClient.QuoteRequest.class);
+		verify(provider).quote(eq("store-token"), request.capture());
+		assertEquals("01001000", request.getValue().originPostalCode());
+		assertEquals("96020360", request.getValue().destinationPostalCode());
+		assertEquals(2, request.getValue().products().getFirst().quantity());
+		assertEquals(0, request.getValue().products().getFirst().unitValue().compareTo(BigDecimal.TEN));
+		assertEquals(0, request.getValue().products().getFirst().widthCm().compareTo(new BigDecimal("10.25")));
+		assertEquals(fixture.variantId().toString(), request.getValue().products().getFirst().id());
+		api.perform(post(productPath).contentType(APPLICATION_JSON).content("{\"postalCode\":\"96020-360\",\"quantity\":2}")
+						.with(r -> { r.setServerName(host); return r; })).andExpect(status().isBadRequest());
+		api.perform(post(productPath).contentType(APPLICATION_JSON).content("{\"postalCode\":\"96020360\",\"quantity\":0}")
+						.with(r -> { r.setServerName(host); return r; })).andExpect(status().isBadRequest());
+		assertEquals(404, assertThrows(ResponseStatusException.class,
+				() -> service.product(otherStore, fixture.productId(), fixture.variantId(), 1, "96020360")).getStatusCode().value());
+		verify(auth, never()).accessToken(otherStore);
+
+		String cart = shoppingCartService.create(store).token();
+		shoppingCartService.setQuantity(store, cart, fixture.productId(), fixture.variantId(), 3);
+		var cartBefore = shoppingCartService.get(store, cart);
+		api.perform(post("/api/public/cart/shipping-estimates").header("Cart-Token", cart)
+						.contentType(APPLICATION_JSON).content("{\"postalCode\":\"96020360\"}")
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.quotes[0].deliveryDays").value(5));
+		assertEquals(cartBefore, shoppingCartService.get(store, cart));
+		assertEquals(404, assertThrows(ResponseStatusException.class,
+				() -> service.cart(otherStore, cart, "96020360")).getStatusCode().value());
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.EXIT, 3, "Adjustment", UUID.randomUUID());
+		api.perform(post("/api/public/cart/shipping-estimates").header("Cart-Token", cart)
+						.contentType(APPLICATION_JSON).content("{\"postalCode\":\"96020360\"}")
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isConflict()).andExpect(jsonPath("$.items[0].variantId").value(fixture.variantId().toString()))
+				.andExpect(jsonPath("$.items[0].reasons[0]").value("UNAVAILABLE"));
+	}
+
+	@Test
+	void shippingEstimatesShouldNotQuotePartialCartsOrHideProviderFailures() throws Exception {
+		CatalogActor actor = catalogActor();
+		UUID store = catalogStoreResolver.storeFor(actor.id());
+		InventoryFixture fixture = inventoryFixture(actor);
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 2, "Stock", UUID.randomUUID());
+		String token = shoppingCartService.create(store).token();
+		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
+		var auth = mock(MelhorEnvioOAuthService.class);
+		var provider = mock(MelhorEnvioClient.class);
+		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, auth, provider);
+		String host = storefrontHost(actor);
+		String path = "/api/public/cart/shipping-estimates";
+		mockMvc.perform(post(path).header("Cart-Token", token).contentType(APPLICATION_JSON)
+						.content("{\"postalCode\":\"96020360\"}").with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isConflict()).andExpect(jsonPath("$.items[0].reasons[0]").value("MISSING_MEASUREMENTS"));
+		mockMvc.perform(post("/api/public/catalog/products/{productId}/variants/{variantId}/shipping-estimates",
+						fixture.productId(), fixture.variantId()).contentType(APPLICATION_JSON)
+						.content("{\"postalCode\":\"96020360\",\"quantity\":1}").with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("ITEMS_NOT_QUOTABLE"));
+		mockMvc.perform(post(path).contentType(APPLICATION_JSON).content("{\"postalCode\":\"96020360\"}")
+						.with(r -> { r.setServerName(host); return r; })).andExpect(status().isNotFound());
+		var issue = assertThrows(ShippingEstimateService.InvalidItems.class, () -> service.cart(store, token, "96020360"));
+		assertEquals(List.of("MISSING_MEASUREMENTS"), issue.items().getFirst().reasons());
+		verify(auth, never()).accessToken(any());
+		verify(provider, never()).quote(any(), any());
+		productService.updateVariantShipping(actor.id(), fixture.productId(), fixture.variantId(),
+				new VariantShippingRequest(new BigDecimal("0.125"), BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN));
+		assertEquals(409, assertThrows(ResponseStatusException.class,
+				() -> service.cart(store, token, "96020360")).getStatusCode().value());
+		storeShippingSettingsService.update(actor.id(), new StoreShippingSettingsService.Settings(
+				"01001000", "Rua A", "10", null, "Centro", "Sao Paulo", "SP", false, null));
+		when(auth.accessToken(store)).thenReturn("store-token");
+		when(provider.quote(eq("store-token"), any())).thenThrow(new MelhorEnvioException(MelhorEnvioException.Reason.RATE_LIMIT));
+		MockMvc api = MockMvcBuilders.standaloneSetup(new ShippingEstimateController(
+				new PublicStoreResolver(storeRepository, "localhost"), service)).build();
+		api.perform(post(path).header("Cart-Token", token).contentType(APPLICATION_JSON)
+						.content("{\"postalCode\":\"96020360\"}").with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isServiceUnavailable())
+				.andExpect(jsonPath("$.code").value("SHIPPING_TEMPORARILY_UNAVAILABLE"))
+				.andExpect(r -> assertEquals("no-store", r.getResponse().getHeader("Cache-Control")));
+		String empty = shoppingCartService.create(store).token();
+		assertEquals(409, assertThrows(ResponseStatusException.class,
+				() -> service.cart(store, empty, "96020360")).getStatusCode().value());
+		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 2);
+		checkoutReservationService.start(store, token);
+		assertEquals("UNAVAILABLE", assertThrows(ShippingEstimateService.InvalidItems.class,
+				() -> service.cart(store, token, "96020360")).items().getFirst().reasons().getFirst());
+	}
+
+	@Test
+	void shippingEstimatesShouldReportEveryUnquotableCartItemAndRefreshStoreAuthorization() {
+		CatalogActor actor = catalogActor();
+		UUID store = catalogStoreResolver.storeFor(actor.id());
+		InventoryFixture fixture = inventoryFixture(actor);
+		ItemType type = itemTypeService.create(actor.id(), new ItemTypeValues("Second type", false, false, null));
+		Product second = productService.create(actor.id(), new ProductRequest(type.getId(), "SKU2", "Second",
+				"Description", BigDecimal.TEN, List.of(new VariantRequest(null, null, null))));
+		UUID secondVariant = jdbcTemplate.queryForObject(
+				"SELECT variant_id FROM catalog_product_variants WHERE product_id = ?", UUID.class, second.getId());
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 2, "Stock", UUID.randomUUID());
+		inventoryService.move(actor.id(), second.getId(), secondVariant, MovementType.ENTRY, 1, "Stock", UUID.randomUUID());
+		productService.updateVariantShipping(actor.id(), fixture.productId(), fixture.variantId(),
+				new VariantShippingRequest(BigDecimal.ONE, BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN));
+		String cart = shoppingCartService.create(store).token();
+		shoppingCartService.setQuantity(store, cart, fixture.productId(), fixture.variantId(), 1);
+		shoppingCartService.setQuantity(store, cart, second.getId(), secondVariant, 1);
+		productService.setVariantActive(actor.id(), second.getId(), secondVariant, false);
+		storeShippingSettingsService.update(actor.id(), new StoreShippingSettingsService.Settings(
+				"01001000", "Rua A", "10", null, "Centro", "Sao Paulo", "SP", false, null));
+		var oauthClient = mock(MelhorEnvioOAuthClient.class);
+		var tokens = mock(MelhorEnvioOAuthClient.Tokens.class);
+		when(tokens.accessToken()).thenReturn("old-token", "fresh-token");
+		when(tokens.refreshToken()).thenReturn("refresh-token", "next-refresh");
+		when(tokens.expiresIn()).thenReturn(1L, 3600L);
+		when(oauthClient.exchange("code")).thenReturn(tokens);
+		when(oauthClient.refresh("refresh-token")).thenReturn(tokens);
+		var authorization = new MelhorEnvioOAuthService(jdbcTemplate, transactionManager, catalogStoreResolver,
+				oauthClient, "client", "https://panel.example.test/api/public/integrations/melhor-envio/callback",
+				Base64.getEncoder().encodeToString(new byte[32]));
+		var start = authorization.start(actor.id(), "panel.example.test");
+		String state = UriComponentsBuilder.fromUriString(start.authorizationUrl()).build().getQueryParams().getFirst("state");
+		authorization.complete(state, start.browserSecret(), "code", null);
+		var provider = mock(MelhorEnvioClient.class);
+		var result = new MelhorEnvioClient.QuoteResult(List.of(), List.of(new MelhorEnvioClient.UnavailableService(1, "PAC")));
+		when(provider.quote(eq("fresh-token"), any())).thenReturn(result);
+		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, authorization, provider);
+		var issue = assertThrows(ShippingEstimateService.InvalidItems.class, () -> service.cart(store, cart, "96020360"));
+		assertEquals(1, issue.items().size());
+		assertEquals(secondVariant, issue.items().getFirst().variantId());
+		assertEquals(List.of("UNAVAILABLE", "MISSING_MEASUREMENTS"), issue.items().getFirst().reasons());
+		verify(provider, never()).quote(any(), any());
+		verify(oauthClient, never()).refresh(any());
+		productService.setVariantActive(actor.id(), second.getId(), secondVariant, true);
+		productService.updateVariantShipping(actor.id(), second.getId(), secondVariant,
+				new VariantShippingRequest(BigDecimal.ONE, BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN));
+		assertEquals(result, service.cart(store, cart, "96020360"));
+		verify(oauthClient).refresh("refresh-token");
+		ArgumentCaptor<MelhorEnvioClient.QuoteRequest> request = ArgumentCaptor.forClass(MelhorEnvioClient.QuoteRequest.class);
+		verify(provider).quote(eq("fresh-token"), request.capture());
+		assertEquals(2, request.getValue().products().size());
 	}
 
 	@Test

@@ -83,6 +83,8 @@ public class SecurityConfiguration {
                         .requestMatchers(HttpMethod.GET, "/api/public/pickup").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/public/integrations/melhor-envio/callback").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/cart").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/public/cart/shipping-estimates",
+                                "/api/public/catalog/products/{productId}/variants/{variantId}/shipping-estimates").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/public/cart").permitAll()
                         .requestMatchers(HttpMethod.PUT, "/api/public/cart/items/{productId}/{variantId}").permitAll()
                         .requestMatchers(HttpMethod.DELETE, "/api/public/cart/items/{productId}/{variantId}").permitAll()
