@@ -1,0 +1,1 @@
+ALTER TABLE catalog_product_photos ADD COLUMN cleanup_attempted_at TIMESTAMPTZ;

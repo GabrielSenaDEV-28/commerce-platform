@@ -122,7 +122,7 @@ production exposure requires rate limiting and an abuse-prevention decision.
 
 The item-type, product, manual inventory, inventory audit and checkout
 reservation APIs described below are implemented. Automatic sale deductions,
-photos, management screens, promotions, and store-member permissions remain
+management screens, promotions, and store-member permissions remain
 planned.
 
 #### Item types and variants
@@ -219,6 +219,33 @@ For example, `POST /api/products` accepts:
   ]
 }
 ```
+
+#### Product photos
+
+The authenticated merchant manages photos with `POST /api/products/{id}/photos`
+(multipart field `file`), `GET /api/products/{id}/photos`, `DELETE
+/api/products/{id}/photos/{photoId}`, and `PUT /api/products/{id}/photos/order`
+with `{"photoIds":["...","..."]}` containing every current photo exactly once.
+The first photo is the cover. Each product has at most ten photos, each at most
+10 MiB. JPEG, PNG and WebP content is decoded and validated; images above
+40 million pixels are rejected. Photos belong to products, not variants.
+Public catalog product responses include the ordered `photos` URL array.
+
+Configure `PHOTO_S3_BUCKET`, `PHOTO_S3_REGION`, `PHOTO_PUBLIC_BASE_URL`,
+and optionally `PHOTO_S3_ENDPOINT` for an S3-compatible service. Supply
+credentials through the AWS SDK credential chain, not in the repository.
+The bucket or CDN must be configured separately to serve the generated object
+keys publicly; configure HTTPS and only expose intended product media. Public
+URLs remain accessible to anyone who knows them, even if a product is
+deactivated, and caches can retain images after deletion. Original image data,
+including metadata, is public. Uploaded images are not resized or stripped.
+
+Uploads and deletions use persistent intermediate states. Failed deletes and
+interrupted uploads are retried by a background cleanup; uploads left pending
+for 30 minutes are considered interrupted. Monitor cleanup failures and bucket
+lifecycle/retention, including potentially orphaned objects after an uncertain
+provider timeout. The S3-compatible service and CDN still need validation
+in the target environment.
 
 #### Shipping preparation
 
@@ -423,9 +450,7 @@ variant pages are separate requests and can reflect different moments if stock
 changes between requests.
 
 The future management screen should show SKU, photo, description, total stock
-and variant-level stock; no screen exists yet. Photo storage and management
-still require a decision. Product IDs provide a stable identity for future
-photo associations.
+and variant-level stock; no screen exists yet.
 
 #### Public catalog API
 
@@ -467,7 +492,7 @@ APIs, history and actor details remain private.
 
 The public API has no rate limiting. Production exposure requires an
 abuse-prevention and traffic-limiting decision. The storefront UI, product
-photos and checkout screens are not implemented.
+checkout screens are not implemented.
 
 #### Anonymous shopping cart API
 

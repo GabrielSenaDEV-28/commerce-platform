@@ -21,6 +21,8 @@ import com.gabrielsena.commerce.catalog.CatalogStoreResolver;
 import com.gabrielsena.commerce.catalog.ItemTypeNotFoundException;
 import com.gabrielsena.commerce.catalog.application.ItemTypeService;
 import com.gabrielsena.commerce.catalog.application.ProductService;
+import com.gabrielsena.commerce.catalog.application.ProductPhotoStorage;
+import com.gabrielsena.commerce.catalog.application.ProductPhotoService;
 import com.gabrielsena.commerce.catalog.api.ProductRequest;
 import com.gabrielsena.commerce.catalog.api.VariantRequest;
 import com.gabrielsena.commerce.catalog.api.VariantShippingRequest;
@@ -66,6 +68,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.mock.web.MockMultipartFile;
 import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -73,6 +76,9 @@ import org.springframework.web.server.ResponseStatusException;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 import java.net.URI;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import javax.imageio.ImageIO;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -103,6 +109,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.hamcrest.Matchers.hasItem;
@@ -111,6 +118,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -177,6 +185,12 @@ class CommercePlatformApplicationTests {
 
 	@MockitoSpyBean
 	private MelhorEnvioClient shippingProvider;
+
+	@MockitoSpyBean
+	private ProductPhotoStorage photoStorage;
+
+	@Autowired
+	private ProductPhotoService photoService;
 
 	@Autowired
 	private CustomerAuthService customerAuthService;
@@ -261,6 +275,128 @@ class CommercePlatformApplicationTests {
 
 	@Test
 	void contextLoads() {
+	}
+
+	@Test
+	void productPhotosShouldUploadReorderAndIsolateStores() throws Exception {
+		CatalogActor actor = catalogActor();
+		CatalogActor other = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		doNothing().when(photoStorage).put(any(), any(), any());
+		doNothing().when(photoStorage).delete(any());
+		doAnswer(invocation -> "https://images.example.test/" + invocation.getArgument(0))
+				.when(photoStorage).url(any());
+		ByteArrayOutputStream output = new ByteArrayOutputStream();
+		ImageIO.write(new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB), "png", output);
+		String path = "/api/products/" + fixture.productId() + "/photos";
+		String first = mockMvc.perform(multipart(path).file(new MockMultipartFile("file", "x.png", "image/png", output.toByteArray()))
+						.header("Authorization", "Bearer " + actor.token()))
+				.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+		String second = mockMvc.perform(multipart(path).file(new MockMultipartFile("file", "x.png", "image/png", output.toByteArray()))
+						.header("Authorization", "Bearer " + actor.token()))
+				.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+		String a = JsonPath.read(first, "$.id");
+		String b = JsonPath.read(second, "$.id");
+		mockMvc.perform(put(path + "/order").header("Authorization", "Bearer " + actor.token())
+						.contentType(APPLICATION_JSON).content("{\"photoIds\":[\"" + b + "\",\"" + a + "\"]}"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$[0].id").value(b));
+		mockMvc.perform(get("/api/public/catalog/products/{id}", fixture.productId())
+						.with(r -> { r.setServerName(storefrontHost(actor)); return r; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.photos[0]").value(org.hamcrest.Matchers.containsString(b)));
+		mockMvc.perform(get(path).header("Authorization", "Bearer " + other.token())).andExpect(status().isNotFound());
+		mockMvc.perform(get(path)).andExpect(status().isUnauthorized());
+		mockMvc.perform(delete(path + "/" + b).header("Authorization", "Bearer " + actor.token()))
+				.andExpect(status().isNoContent());
+		mockMvc.perform(get(path).header("Authorization", "Bearer " + actor.token()))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+		mockMvc.perform(multipart(path).file(new MockMultipartFile("file", "x.png", "image/png", new byte[]{1, 2, 3}))
+						.header("Authorization", "Bearer " + actor.token())).andExpect(status().isBadRequest());
+	}
+
+	@Test
+	void productPhotosShouldEnforceLimitAndCleanFailedOperations() throws Exception {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		doNothing().when(photoStorage).put(any(), any(), any());
+		doNothing().when(photoStorage).delete(any());
+		doAnswer(invocation -> "https://images.example.test/" + invocation.getArgument(0))
+				.when(photoStorage).url(any());
+		ByteArrayOutputStream output = new ByteArrayOutputStream();
+		ImageIO.write(new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB), "png", output);
+		for (int i = 0; i < 10; i++) {
+			photoService.upload(actor.id(), fixture.productId(),
+					new MockMultipartFile("file", "x.png", "image/png", output.toByteArray()));
+		}
+		assertEquals(409, assertThrows(ResponseStatusException.class, () -> photoService.upload(actor.id(),
+				fixture.productId(), new MockMultipartFile("file", "x.png", "image/png", output.toByteArray())))
+				.getStatusCode().value());
+		var first = photoService.list(actor.id(), fixture.productId()).getFirst();
+		doThrow(new ResponseStatusException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE))
+				.when(photoStorage).delete(any());
+		assertEquals(503, assertThrows(ResponseStatusException.class,
+				() -> photoService.delete(actor.id(), fixture.productId(), first.id())).getStatusCode().value());
+		assertEquals(9, photoService.list(actor.id(), fixture.productId()).size());
+		doNothing().when(photoStorage).delete(any());
+		photoService.cleanup();
+		assertEquals(0, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM catalog_product_photos WHERE photo_id = ?",
+				Integer.class, first.id()));
+		doThrow(new ResponseStatusException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE))
+				.when(photoStorage).put(any(), any(), any());
+		assertEquals(503, assertThrows(ResponseStatusException.class, () -> photoService.upload(actor.id(),
+				fixture.productId(), new MockMultipartFile("file", "x.png", "image/png", output.toByteArray())))
+				.getStatusCode().value());
+		photoService.cleanup();
+		assertEquals(0, jdbcTemplate.queryForObject("""
+				SELECT COUNT(*) FROM catalog_product_photos WHERE product_id = ? AND status <> 'READY'
+				""", Integer.class, fixture.productId()));
+	}
+
+	@Test
+	void productPhotosShouldValidateSupportedFormatsAndSize() throws Exception {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		doNothing().when(photoStorage).put(any(), any(), any());
+		doAnswer(invocation -> "https://images.example.test/" + invocation.getArgument(0))
+				.when(photoStorage).url(any());
+		ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
+		ImageIO.write(new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB), "jpeg", jpeg);
+		photoService.upload(actor.id(), fixture.productId(), new MockMultipartFile("file", "x", "text/plain", jpeg.toByteArray()));
+		byte[] webp = Base64.getDecoder().decode("UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAgA0JaQAA3AA/vv9UAA=");
+		photoService.upload(actor.id(), fixture.productId(), new MockMultipartFile("file", "x", "text/plain", webp));
+		verify(photoStorage).put(any(), eq("image/jpeg"), any());
+		verify(photoStorage).put(any(), eq("image/webp"), any());
+		assertEquals(400, assertThrows(ResponseStatusException.class, () -> photoService.upload(actor.id(),
+				fixture.productId(), new MockMultipartFile("file", "x.png", "image/png", new byte[10 * 1024 * 1024 + 1])))
+				.getStatusCode().value());
+	}
+
+	@Test
+	void productPhotosShouldEnforceLimitUnderConcurrentUploads() throws Exception {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		doNothing().when(photoStorage).put(any(), any(), any());
+		doAnswer(invocation -> "https://images.example.test/" + invocation.getArgument(0))
+				.when(photoStorage).url(any());
+		ByteArrayOutputStream output = new ByteArrayOutputStream();
+		ImageIO.write(new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB), "png", output);
+		for (int i = 0; i < 9; i++) {
+			photoService.upload(actor.id(), fixture.productId(),
+					new MockMultipartFile("file", "x.png", "image/png", output.toByteArray()));
+		}
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		try {
+			List<Future<?>> calls = List.of(
+					executor.submit(() -> { start.await(); return photoService.upload(actor.id(), fixture.productId(),
+							new MockMultipartFile("file", "x.png", "image/png", output.toByteArray())); }),
+					executor.submit(() -> { start.await(); return photoService.upload(actor.id(), fixture.productId(),
+							new MockMultipartFile("file", "x.png", "image/png", output.toByteArray())); }));
+			start.countDown();
+			assertOneSuccessOneConflict(calls);
+			assertEquals(10, photoService.list(actor.id(), fixture.productId()).size());
+		} finally {
+			executor.shutdownNow();
+		}
 	}
 
 	@Test
