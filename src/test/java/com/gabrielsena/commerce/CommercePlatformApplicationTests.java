@@ -9,6 +9,7 @@ import com.gabrielsena.commerce.auth.MerchantAccountRepository;
 import com.gabrielsena.commerce.auth.RefreshTokenRepository;
 import com.gabrielsena.commerce.auth.InvalidRefreshTokenException;
 import com.gabrielsena.commerce.auth.application.AuthenticateMerchant;
+import com.gabrielsena.commerce.auth.application.AuthenticationRateLimiter;
 import com.gabrielsena.commerce.auth.application.RefreshAuthentication;
 import com.gabrielsena.commerce.auth.application.RegisterMerchant;
 import com.gabrielsena.commerce.auth.application.RegisterMerchantCommand;
@@ -51,6 +52,7 @@ import com.gabrielsena.commerce.shipping.application.ShippingEstimateService;
 import com.gabrielsena.commerce.shipping.api.ShippingEstimateController;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -216,6 +218,15 @@ class CommercePlatformApplicationTests {
 	@Autowired
 	private MockMvc mockMvc;
 
+	@BeforeEach
+	void resetMockClientRateLimits() {
+		jdbcTemplate.update("""
+				DELETE FROM authentication_rate_limits
+				WHERE client_address IN ('127.0.0.1', '198.51.100.11', '198.51.100.12',
+				                         '198.51.100.13', '198.51.100.14')
+				""");
+	}
+
 	private static PostgreSQLContainer<?> startPostgresContainerIfNeeded() {
 		if (TEST_DATABASE_URL != null) {
 			return null;
@@ -275,6 +286,101 @@ class CommercePlatformApplicationTests {
 
 	@Test
 	void contextLoads() {
+	}
+
+	@Test
+	void authenticationRateLimitShouldShareCategoriesAcrossTenantsAndIgnoreForwardedHeaders() throws Exception {
+		String ip = "198.51.100.11";
+		for (int i = 0; i < 10; i++) {
+			String path = i % 2 == 0 ? "/api/merchants" : "/api/public/customer-auth/register";
+			mockMvc.perform(post(path).contentType(APPLICATION_JSON).content("{}")
+							.header("X-Forwarded-For", "203.0.113." + (i + 1))
+							.with(r -> { r.setRemoteAddr(ip); r.setServerName("store" + UUID.randomUUID() + ".localhost"); return r; }))
+					.andExpect(status().isBadRequest());
+		}
+		mockMvc.perform(post("/api/merchants").contentType(APPLICATION_JSON).content("{}")
+						.header("X-Forwarded-For", "203.0.113.99").with(r -> { r.setRemoteAddr(ip); return r; }))
+				.andExpect(status().isTooManyRequests()).andExpect(jsonPath("$.code").value("AUTH_RATE_LIMITED"))
+				.andExpect(result -> assertTrue(Integer.parseInt(result.getResponse().getHeader("Retry-After")) > 0))
+				.andExpect(result -> assertEquals("no-store", result.getResponse().getHeader("Cache-Control")));
+		mockMvc.perform(post("/api/auth/login").contentType(APPLICATION_JSON).content("{}")
+						.with(r -> { r.setRemoteAddr(ip); return r; })).andExpect(status().isBadRequest());
+		mockMvc.perform(post("/api/merchants").contentType(APPLICATION_JSON).content("{}")
+						.with(r -> { r.setRemoteAddr("198.51.100.12"); return r; })).andExpect(status().isBadRequest());
+		mockMvc.perform(post("/api/auth/logout").contentType(APPLICATION_JSON).content("{}")
+						.with(r -> { r.setRemoteAddr(ip); return r; })).andExpect(status().isBadRequest());
+		jdbcTemplate.update("""
+				UPDATE authentication_rate_limits SET window_started_at = clock_timestamp() - INTERVAL '16 minutes'
+				WHERE client_address = ? AND category = 'REGISTER'
+				""", ip);
+		mockMvc.perform(post("/api/merchants").contentType(APPLICATION_JSON).content("{}")
+						.with(r -> { r.setRemoteAddr(ip); return r; })).andExpect(status().isBadRequest());
+	}
+
+	@Test
+	void authenticationRateLimitShouldEnforceAtomicSharedLimitAndCleanup() throws Exception {
+		var first = new AuthenticationRateLimiter(jdbcTemplate, 3, 3, 3, 900);
+		var second = new AuthenticationRateLimiter(jdbcTemplate, 3, 3, 3, 900);
+		String address = "198.51.100.13";
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(8);
+		try {
+			List<Future<AuthenticationRateLimiter.Decision>> calls = new java.util.ArrayList<>();
+			for (int i = 0; i < 8; i++) {
+				var limiter = i % 2 == 0 ? first : second;
+				calls.add(executor.submit(() -> {
+					start.await();
+					return limiter.check(address, AuthenticationRateLimiter.Category.LOGIN);
+				}));
+			}
+			start.countDown();
+			int allowed = 0;
+			for (var call : calls) {
+				if (call.get(30, TimeUnit.SECONDS).allowed()) allowed++;
+			}
+			assertEquals(3, allowed);
+			assertEquals(4, jdbcTemplate.queryForObject("""
+					SELECT attempts FROM authentication_rate_limits WHERE client_address = ? AND category = 'LOGIN'
+					""", Integer.class, address));
+			jdbcTemplate.update("""
+					UPDATE authentication_rate_limits SET window_started_at = clock_timestamp() - INTERVAL '16 minutes'
+					WHERE client_address = ?
+					""", address);
+			first.cleanup();
+			assertEquals(0, jdbcTemplate.queryForObject(
+					"SELECT COUNT(*) FROM authentication_rate_limits WHERE client_address = ?", Integer.class, address));
+		} finally {
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
+	void authenticationRateLimitShouldCountSuccessfulAndFailedLoginAndRefresh() throws Exception {
+		CatalogActor actor = catalogActor();
+		String email = merchantAccountRepository.findById(actor.id()).orElseThrow().getEmail();
+		String ip = "198.51.100.14";
+		String login = "{\"email\":\"" + email + "\",\"password\":\"a-strong-local-password\"}";
+		String result = mockMvc.perform(post("/api/auth/login").contentType(APPLICATION_JSON).content(login)
+						.with(r -> { r.setRemoteAddr(ip); return r; }))
+				.andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+		String refresh = JsonPath.read(result, "$.refreshToken");
+		mockMvc.perform(post("/api/auth/refresh").contentType(APPLICATION_JSON)
+						.content("{\"refreshToken\":\"" + refresh + "\"}")
+						.with(r -> { r.setRemoteAddr(ip); return r; })).andExpect(status().isOk());
+		for (int i = 1; i < 20; i++) {
+			String path = i % 2 == 0 ? "/api/auth/login" : "/api/public/customer-auth/login";
+			mockMvc.perform(post(path).contentType(APPLICATION_JSON).content("{}")
+							.with(r -> { r.setRemoteAddr(ip); return r; })).andExpect(status().isBadRequest());
+		}
+		mockMvc.perform(post("/api/auth/login").contentType(APPLICATION_JSON).content("{}")
+						.with(r -> { r.setRemoteAddr(ip); return r; })).andExpect(status().isTooManyRequests());
+		for (int i = 1; i < 60; i++) {
+			String path = i % 2 == 0 ? "/api/auth/refresh" : "/api/public/customer-auth/refresh";
+			mockMvc.perform(post(path).contentType(APPLICATION_JSON).content("{}")
+							.with(r -> { r.setRemoteAddr(ip); return r; })).andExpect(status().isBadRequest());
+		}
+		mockMvc.perform(post("/api/public/customer-auth/refresh").contentType(APPLICATION_JSON).content("{}")
+						.with(r -> { r.setRemoteAddr(ip); return r; })).andExpect(status().isTooManyRequests());
 	}
 
 	@Test
