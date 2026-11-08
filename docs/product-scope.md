@@ -242,8 +242,21 @@ and dimensions up to two. The variant response includes these values under
 measurements until configured. Updates are recorded in product history.
 Missing measurements will prevent shipping quotes when quoting is implemented.
 
-Pickup is free and uses the same address as the shipping origin. Shipping
-quotes and carrier integration remain future work.
+Pickup is free and uses the same address as the shipping origin. Customer-facing
+shipping quotes and end-to-end carrier integration remain future work.
+
+The internal Melhor Envio quotation client is prepared for sandbox only.
+It sends origin and destination postal codes and unit product data, rounding
+each dimension up to whole centimeters without changing the catalog. It uses
+the provider's customized price and delivery time and retains Correios
+services. Provider failures and individual unavailable services are distinct;
+the client is not yet connected to an endpoint or a merchant authorization
+flow. Configure `MELHOR_ENVIO_USER_AGENT` as the application name and a
+technical contact email before use. Tokens are supplied per call, not stored
+or logged by this client. OAuth, token storage, checkout quotes and validation
+against a real sandbox account remain future work.
+Provider contract reference:
+[Melhor Envio freight calculation](https://docs.melhorenvio.com.br/reference/calculo-de-fretes-por-produtos).
 
 #### Inventory
 
