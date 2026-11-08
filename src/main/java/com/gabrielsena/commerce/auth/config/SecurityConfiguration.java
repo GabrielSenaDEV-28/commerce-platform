@@ -72,6 +72,9 @@ public class SecurityConfiguration {
                                 "/api/auth/refresh",
                                 "/api/auth/logout"
                         ).permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/public/catalog/products",
+                                "/api/public/catalog/products/{productId}",
+                                "/api/public/catalog/products/{productId}/variants").permitAll()
                         .anyRequest().authenticated()
                 )
                 .oauth2ResourceServer(resourceServer -> resourceServer.jwt(Customizer.withDefaults()))

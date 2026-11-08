@@ -11,5 +11,7 @@ public interface StoreRepository extends JpaRepository<Store, UUID> {
 
     boolean existsBySubdomain(Subdomain subdomain);
 
+    Optional<Store> findBySubdomain(Subdomain subdomain);
+
     Optional<Store> findByMerchantId(UUID merchantId);
 }
