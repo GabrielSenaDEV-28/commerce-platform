@@ -71,6 +71,11 @@ public class ProductService {
     }
 
     @Transactional(readOnly = true)
+    public ProductVariant getVariant(UUID actor, UUID productId, UUID variantId) {
+        return variant(product(productId, stores.storeFor(actor)), variantId);
+    }
+
+    @Transactional(readOnly = true)
     public Page<Product> list(UUID actor, boolean active, Pageable page) {
         return products.findByStoreIdAndActive(stores.storeFor(actor), active, page);
     }
