@@ -31,6 +31,7 @@ import com.gabrielsena.commerce.catalog.domain.SizeFormat;
 import com.gabrielsena.commerce.cart.application.ShoppingCartService;
 import com.gabrielsena.commerce.checkout.application.CheckoutReservationService;
 import com.gabrielsena.commerce.order.application.OrderService;
+import com.gabrielsena.commerce.order.application.OrderCheckoutService;
 import com.gabrielsena.commerce.customer.application.CustomerAuthService;
 import com.gabrielsena.commerce.customer.application.CustomerProfileService;
 import com.gabrielsena.commerce.inventory.application.InventoryService;
@@ -62,6 +63,7 @@ import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.mockito.ArgumentCaptor;
@@ -99,6 +101,8 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.hamcrest.Matchers.hasItem;
@@ -161,6 +165,18 @@ class CommercePlatformApplicationTests {
 
 	@Autowired
 	private OrderService orderService;
+
+	@Autowired
+	private OrderCheckoutService orderCheckoutService;
+
+	@Autowired
+	private ShippingEstimateService shippingEstimateService;
+
+	@MockitoSpyBean
+	private MelhorEnvioOAuthService shippingAuthorization;
+
+	@MockitoSpyBean
+	private MelhorEnvioClient shippingProvider;
 
 	@Autowired
 	private CustomerAuthService customerAuthService;
@@ -266,7 +282,7 @@ class CommercePlatformApplicationTests {
 		var response = new MelhorEnvioClient.QuoteResult(
 				List.of(new MelhorEnvioClient.ServiceQuote(1, "PAC", new BigDecimal("12.34"), 5)), List.of());
 		when(provider.quote(eq("store-token"), any())).thenReturn(response);
-		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, auth, provider);
+		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, auth, provider, transactionManager);
 		MockMvc api = MockMvcBuilders.standaloneSetup(new ShippingEstimateController(
 				new PublicStoreResolver(storeRepository, "localhost"), service)).build();
 		String host = storefrontHost(actor);
@@ -319,7 +335,7 @@ class CommercePlatformApplicationTests {
 		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
 		var auth = mock(MelhorEnvioOAuthService.class);
 		var provider = mock(MelhorEnvioClient.class);
-		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, auth, provider);
+		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, auth, provider, transactionManager);
 		String host = storefrontHost(actor);
 		String path = "/api/public/cart/shipping-estimates";
 		mockMvc.perform(post(path).header("Cart-Token", token).contentType(APPLICATION_JSON)
@@ -387,13 +403,15 @@ class CommercePlatformApplicationTests {
 		when(auth.accessToken(store)).thenReturn("store-token");
 		when(provider.quote(eq("store-token"), any())).thenReturn(new MelhorEnvioClient.QuoteResult(
 				List.of(new MelhorEnvioClient.ServiceQuote(1, "PAC", new BigDecimal("12.34"), 5)), List.of()));
-		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, auth, provider);
+		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, auth, provider, transactionManager);
 		MockMvc api = MockMvcBuilders.standaloneSetup(new ShippingEstimateController(
 				new PublicStoreResolver(storeRepository, "localhost"), service)).build();
 		String path = "/api/public/checkout/" + reservation.id() + "/shipping-estimates";
 		api.perform(post(path).header("Cart-Token", token).contentType(APPLICATION_JSON)
 						.content("{\"postalCode\":\"96020360\"}").with(r -> { r.setServerName(storefrontHost(actor)); return r; }))
-				.andExpect(status().isOk()).andExpect(jsonPath("$.reservationId").value(reservation.id().toString()))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.quoteId").exists())
+				.andExpect(jsonPath("$.request").doesNotExist())
+				.andExpect(jsonPath("$.reservationId").value(reservation.id().toString()))
 				.andExpect(jsonPath("$.expiresAt").exists()).andExpect(jsonPath("$.quotes[0].price").value(12.34))
 				.andExpect(r -> assertEquals("no-store", r.getResponse().getHeader("Cache-Control")));
 		ArgumentCaptor<MelhorEnvioClient.QuoteRequest> request = ArgumentCaptor.forClass(MelhorEnvioClient.QuoteRequest.class);
@@ -422,7 +440,7 @@ class CommercePlatformApplicationTests {
 		var reservation = checkoutReservationService.start(store, token);
 		var auth = mock(MelhorEnvioOAuthService.class);
 		var provider = mock(MelhorEnvioClient.class);
-		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, auth, provider);
+		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, auth, provider, transactionManager);
 		String path = "/api/public/checkout/" + reservation.id() + "/shipping-estimates";
 		String host = storefrontHost(actor);
 		String body = "{\"postalCode\":\"96020360\"}";
@@ -478,7 +496,7 @@ class CommercePlatformApplicationTests {
 		var auth = mock(MelhorEnvioOAuthService.class);
 		var provider = mock(MelhorEnvioClient.class);
 		when(auth.accessToken(store)).thenReturn("store-token");
-		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, auth, provider);
+		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, auth, provider, transactionManager);
 		var first = checkoutReservationService.start(store, token);
 		when(provider.quote(eq("store-token"), any())).thenAnswer(invocation -> {
 			checkoutReservationService.cancel(store, token, first.id());
@@ -536,7 +554,7 @@ class CommercePlatformApplicationTests {
 		var provider = mock(MelhorEnvioClient.class);
 		var result = new MelhorEnvioClient.QuoteResult(List.of(), List.of(new MelhorEnvioClient.UnavailableService(1, "PAC")));
 		when(provider.quote(eq("fresh-token"), any())).thenReturn(result);
-		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, authorization, provider);
+		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, authorization, provider, transactionManager);
 		var issue = assertThrows(ShippingEstimateService.InvalidItems.class, () -> service.cart(store, cart, "96020360"));
 		assertEquals(1, issue.items().size());
 		assertEquals(secondVariant, issue.items().getFirst().variantId());
@@ -1410,6 +1428,170 @@ class CommercePlatformApplicationTests {
 				"Ana", "01001000", "Rua A", "10", null, "Centro", "Sao Paulo", "SP")).id();
 	}
 
+	private ShippingEstimateService.CheckoutQuote shippingFixture(CatalogActor actor, UUID store, String token,
+	                                                               CheckoutReservationService.Checkout reservation) {
+		for (var item : reservation.items()) {
+			if (item.reserved()) {
+				productService.updateVariantShipping(actor.id(), item.productId(), item.variantId(),
+						new VariantShippingRequest(BigDecimal.ONE, BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN));
+			}
+		}
+		storeShippingSettingsService.update(actor.id(), new StoreShippingSettingsService.Settings(
+				"01001000", "Rua A", "10", null, "Centro", "Sao Paulo", "SP", true, null));
+		doReturn("store-token").when(shippingAuthorization).accessToken(store);
+		doReturn(new MelhorEnvioClient.QuoteResult(
+				List.of(new MelhorEnvioClient.ServiceQuote(1, "PAC", BigDecimal.ZERO, 5)), List.of()))
+				.when(shippingProvider).quote(eq("store-token"), any());
+		return shippingEstimateService.checkout(store, token, reservation.id(), "01001000");
+	}
+
+	private OrderService.Order deliveryOrder(UUID store, String token, UUID reservation,
+	                                         CustomerAuthService.Customer customer, boolean partial, UUID address,
+	                                         UUID quoteId) {
+		return orderCheckoutService.create(store, token, reservation, customer, partial, address,
+				OrderService.FulfillmentType.DELIVERY, quoteId, 1);
+	}
+
+	@Test
+	void deliveryOrderShouldRequireReconfirmationAndSnapshotServerShipping() throws Exception {
+		CatalogActor actor = catalogActor();
+		UUID store = catalogStoreResolver.storeFor(actor.id());
+		var customer = customerAuthService.register(store, "Ana", "ana@example.com", "a-strong-password");
+		UUID address = deliveryFixture(store, customer.id());
+		String customerToken = customerAuthService.login(store, "ana@example.com", "a-strong-password").accessToken();
+		InventoryFixture fixture = inventoryFixture(actor);
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Stock", UUID.randomUUID());
+		String cart = shoppingCartService.create(store).token();
+		shoppingCartService.setQuantity(store, cart, fixture.productId(), fixture.variantId(), 1);
+		var reservation = checkoutReservationService.start(store, cart);
+		var old = shippingFixture(actor, store, cart, reservation);
+		String host = storefrontHost(actor);
+		String path = "/api/public/checkout/" + reservation.id() + "/orders";
+		String request = "{\"acceptPartial\":false,\"addressId\":\"" + address
+				+ "\",\"quoteId\":\"" + old.quoteId() + "\",\"shippingServiceId\":1,\"price\":0}";
+		String missingSelection = "{\"acceptPartial\":false,\"addressId\":\"" + address + "\"}";
+		mockMvc.perform(post(path).header("Authorization", "Bearer " + customerToken).header("Cart-Token", cart)
+						.contentType(APPLICATION_JSON).content(missingSelection).with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isConflict());
+		doReturn(new MelhorEnvioClient.QuoteResult(
+				List.of(new MelhorEnvioClient.ServiceQuote(1, "PAC", new BigDecimal("12.34"), 7)), List.of()))
+				.when(shippingProvider).quote(eq("store-token"), any());
+		String changed = mockMvc.perform(post(path).header("Authorization", "Bearer " + customerToken).header("Cart-Token", cart)
+						.contentType(APPLICATION_JSON).content(request).with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("SHIPPING_QUOTE_CHANGED"))
+				.andExpect(jsonPath("$.quote.quotes[0].price").value(12.34))
+				.andExpect(jsonPath("$.quote.quotes[0].deliveryDays").value(7))
+				.andExpect(jsonPath("$.quote.request").doesNotExist())
+				.andExpect(r -> assertEquals("no-store", r.getResponse().getHeader("Cache-Control")))
+				.andReturn().getResponse().getContentAsString();
+		assertEquals(0, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM commerce_orders WHERE reservation_id = ?",
+				Integer.class, reservation.id()));
+		String newQuote = JsonPath.read(changed, "$.quote.quoteId");
+		String confirmed = request.replace(old.quoteId().toString(), newQuote);
+		String order = mockMvc.perform(post(path).header("Authorization", "Bearer " + customerToken).header("Cart-Token", cart)
+						.contentType(APPLICATION_JSON).content(confirmed).with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.delivery.shipping.serviceId").value(1))
+				.andExpect(jsonPath("$.delivery.shipping.price").value(12.34))
+				.andExpect(jsonPath("$.delivery.shipping.deliveryDays").value(7))
+				.andExpect(jsonPath("$.total").value(22.34)).andReturn().getResponse().getContentAsString();
+		String orderId = JsonPath.read(order, "$.id");
+		doReturn(new MelhorEnvioClient.QuoteResult(List.of(), List.of())).when(shippingProvider).quote(eq("store-token"), any());
+		mockMvc.perform(post(path).header("Authorization", "Bearer " + customerToken).header("Cart-Token", cart)
+						.contentType(APPLICATION_JSON).content(confirmed).with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.id").value(orderId)).andExpect(jsonPath("$.total").value(22.34));
+		mockMvc.perform(post(path).header("Authorization", "Bearer " + customerToken).header("Cart-Token", cart)
+						.contentType(APPLICATION_JSON).content(request).with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isConflict());
+		mockMvc.perform(get("/api/public/customer/orders/{id}", orderId).header("Authorization", "Bearer " + customerToken)
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.delivery.shipping.price").value(12.34));
+		mockMvc.perform(get("/api/orders").header("Authorization", "Bearer " + actor.token()))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.content[0].total").value(22.34));
+		mockMvc.perform(get("/api/public/customer/orders").header("Authorization", "Bearer " + customerToken)
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.content[0].total").value(22.34));
+		jdbcTemplate.update("DELETE FROM order_shipping_details WHERE order_id = ?", UUID.fromString(orderId));
+		mockMvc.perform(post(path).header("Authorization", "Bearer " + customerToken).header("Cart-Token", cart)
+						.contentType(APPLICATION_JSON).content(missingSelection).with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.id").value(orderId))
+				.andExpect(jsonPath("$.delivery.shipping").doesNotExist()).andExpect(jsonPath("$.total").value(10));
+	}
+
+	@Test
+	void deliveryOrderShouldRejectChangedInputsAndForeignQuotes() throws Exception {
+		CatalogActor actor = catalogActor();
+		CatalogActor other = catalogActor();
+		UUID store = catalogStoreResolver.storeFor(actor.id());
+		var customer = customerAuthService.register(store, "Ana", "ana@example.com", "a-strong-password");
+		UUID address = deliveryFixture(store, customer.id());
+		InventoryFixture fixture = inventoryFixture(actor);
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Stock", UUID.randomUUID());
+		String cart = shoppingCartService.create(store).token();
+		shoppingCartService.setQuantity(store, cart, fixture.productId(), fixture.variantId(), 1);
+		var reservation = checkoutReservationService.start(store, cart);
+		var quote = shippingFixture(actor, store, cart, reservation);
+		assertEquals(409, assertThrows(ResponseStatusException.class, () -> deliveryOrder(
+				store, cart, reservation.id(), customer, false, address, UUID.randomUUID())).getStatusCode().value());
+		assertEquals(404, assertThrows(ResponseStatusException.class, () -> deliveryOrder(
+				catalogStoreResolver.storeFor(other.id()), cart, reservation.id(), customer, false, address, quote.quoteId()))
+				.getStatusCode().value());
+		String anotherCart = shoppingCartService.create(store).token();
+		assertEquals(409, assertThrows(ResponseStatusException.class, () -> deliveryOrder(
+				store, anotherCart, reservation.id(), customer, false, address, quote.quoteId())).getStatusCode().value());
+		doAnswer(invocation -> {
+			productService.updateVariantShipping(actor.id(), fixture.productId(), fixture.variantId(),
+					new VariantShippingRequest(new BigDecimal("2"), BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN));
+			return new MelhorEnvioClient.QuoteResult(
+					List.of(new MelhorEnvioClient.ServiceQuote(1, "PAC", BigDecimal.ZERO, 5)), List.of());
+		}).when(shippingProvider).quote(eq("store-token"), any());
+		assertEquals(409, assertThrows(ResponseStatusException.class, () -> deliveryOrder(
+				store, cart, reservation.id(), customer, false, address, quote.quoteId())).getStatusCode().value());
+		doAnswer(invocation -> {
+			customerProfileService.update(store, customer.id(), address, new CustomerProfileService.AddressRequest(
+					"Ana", "96020360", "Rua B", "10", null, "Centro", "Sao Paulo", "SP"));
+			return new MelhorEnvioClient.QuoteResult(
+					List.of(new MelhorEnvioClient.ServiceQuote(1, "PAC", BigDecimal.ZERO, 5)), List.of());
+		}).when(shippingProvider).quote(eq("store-token"), any());
+		assertEquals(409, assertThrows(ResponseStatusException.class, () -> deliveryOrder(
+				store, cart, reservation.id(), customer, false, address, quote.quoteId())).getStatusCode().value());
+		assertEquals(0, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM commerce_orders WHERE reservation_id = ?",
+				Integer.class, reservation.id()));
+	}
+
+	@Test
+	void deliveryOrderShouldReturnUnavailableRequoteWithoutCreatingOrder() {
+		CatalogActor actor = catalogActor();
+		UUID store = catalogStoreResolver.storeFor(actor.id());
+		var customer = customerAuthService.register(store, "Ana", "ana@example.com", "a-strong-password");
+		UUID address = deliveryFixture(store, customer.id());
+		InventoryFixture fixture = inventoryFixture(actor);
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Stock", UUID.randomUUID());
+		String cart = shoppingCartService.create(store).token();
+		shoppingCartService.setQuantity(store, cart, fixture.productId(), fixture.variantId(), 1);
+		var reservation = checkoutReservationService.start(store, cart);
+		var quote = shippingFixture(actor, store, cart, reservation);
+		doReturn(new MelhorEnvioClient.QuoteResult(List.of(), List.of(new MelhorEnvioClient.UnavailableService(1, "PAC"))))
+				.when(shippingProvider).quote(eq("store-token"), any());
+		var changed = assertThrows(OrderCheckoutService.ShippingChanged.class, () -> deliveryOrder(
+				store, cart, reservation.id(), customer, false, address, quote.quoteId()));
+		assertEquals(1, changed.quote().unavailable().getFirst().id());
+		doReturn(new MelhorEnvioClient.QuoteResult(
+				List.of(new MelhorEnvioClient.ServiceQuote(1, "PAC", BigDecimal.ZERO, 6)), List.of()))
+				.when(shippingProvider).quote(eq("store-token"), any());
+		assertEquals(6, assertThrows(OrderCheckoutService.ShippingChanged.class, () -> deliveryOrder(
+				store, cart, reservation.id(), customer, false, address, quote.quoteId()))
+				.quote().quotes().getFirst().deliveryDays());
+		assertEquals(409, assertThrows(ResponseStatusException.class, () -> orderCheckoutService.create(
+				store, cart, reservation.id(), customer, false, address, OrderService.FulfillmentType.DELIVERY,
+				quote.quoteId(), 999)).getStatusCode().value());
+		doThrow(new MelhorEnvioException(MelhorEnvioException.Reason.UNAVAILABLE))
+				.when(shippingProvider).quote(eq("store-token"), any());
+		assertThrows(MelhorEnvioException.class, () -> deliveryOrder(
+				store, cart, reservation.id(), customer, false, address, quote.quoteId()));
+		assertEquals(0, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM commerce_orders WHERE reservation_id = ?",
+				Integer.class, reservation.id()));
+	}
+
 	@Test
 	void customerAddressesShouldValidateAndEnforceOwnership() throws Exception {
 		CatalogActor actor = catalogActor();
@@ -1633,8 +1815,10 @@ class CommercePlatformApplicationTests {
 						.with(request -> { request.setServerName(host); return request; }))
 				.andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
 		String reservation = JsonPath.read(checkout, "$.id");
+		var shippingQuote = shippingFixture(actor, store, token, checkoutReservationService.get(store, token));
 		String orderPath = "/api/public/checkout/" + reservation + "/orders";
-		String body = "{\"acceptPartial\":true,\"addressId\":\"" + addressId + "\"}";
+		String body = "{\"acceptPartial\":true,\"addressId\":\"" + addressId
+				+ "\",\"quoteId\":\"" + shippingQuote.quoteId() + "\",\"shippingServiceId\":1}";
 		mockMvc.perform(post(orderPath).header("Cart-Token", token).contentType(APPLICATION_JSON)
 						.content(body).with(request -> { request.setServerName(host); return request; }))
 				.andExpect(status().isUnauthorized());
@@ -1647,7 +1831,7 @@ class CommercePlatformApplicationTests {
 						.with(request -> { request.setServerName(storefrontHost(other)); return request; }))
 				.andExpect(status().isForbidden());
 		mockMvc.perform(post(orderPath).header("Cart-Token", token).header("Authorization", "Bearer " + customerToken).contentType(APPLICATION_JSON)
-						.content("{\"acceptPartial\":false,\"addressId\":\"" + addressId + "\"}")
+						.content(body.replace("\"acceptPartial\":true", "\"acceptPartial\":false"))
 						.with(request -> { request.setServerName(host); return request; }))
 				.andExpect(status().isConflict());
 		mockMvc.perform(post(orderPath).header("Cart-Token", token).header("Authorization", "Bearer " + customerToken).contentType(APPLICATION_JSON)
@@ -1956,26 +2140,27 @@ class CommercePlatformApplicationTests {
 		String token = shoppingCartService.create(store).token();
 		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
 		var first = checkoutReservationService.start(store, token);
+		var shippingQuote = shippingFixture(actor, store, token, first);
 		assertEquals(404, assertThrows(ResponseStatusException.class,
-				() -> orderService.create(store, token, first.id(), customer, false, foreignAddress)).getStatusCode().value());
+				() -> deliveryOrder(store, token, first.id(), customer, false, foreignAddress, shippingQuote.quoteId())).getStatusCode().value());
 		jdbcTemplate.update("UPDATE customer_accounts SET phone = NULL WHERE customer_id = ?", customer.id());
 		assertEquals(409, assertThrows(ResponseStatusException.class,
-				() -> orderService.create(store, token, first.id(), customer, false, addressId)).getStatusCode().value());
+				() -> deliveryOrder(store, token, first.id(), customer, false, addressId, shippingQuote.quoteId())).getStatusCode().value());
 		customerProfileService.updateProfile(store, customer.id(), new CustomerProfileService.ProfileRequest("Ana", "11987654321"));
-		var order = orderService.create(store, token, first.id(), customer, false, addressId);
+		var order = deliveryOrder(store, token, first.id(), customer, false, addressId, shippingQuote.quoteId());
 		customerProfileService.update(store, customer.id(), addressId, new CustomerProfileService.AddressRequest(
 				"Ana", "01001000", "Rua Nova", "10", null, "Centro", "Sao Paulo", "SP"));
 		customerProfileService.delete(store, customer.id(), addressId);
 		assertEquals("Rua A", orderService.ownedOrder(store, customer.id(), order.id()).delivery().address().street());
-		assertEquals("Rua A", orderService.create(store, token, first.id(), customer, false, addressId).delivery().address().street());
+		assertEquals("Rua A", deliveryOrder(store, token, first.id(), customer, false, addressId, shippingQuote.quoteId()).delivery().address().street());
 		assertEquals(409, assertThrows(ResponseStatusException.class,
-				() -> orderService.create(store, token, first.id(), customer, false, foreignAddress)).getStatusCode().value());
+				() -> deliveryOrder(store, token, first.id(), customer, false, foreignAddress, shippingQuote.quoteId())).getStatusCode().value());
 		jdbcTemplate.update("""
 				UPDATE checkout_reservations SET created_at = clock_timestamp() - INTERVAL '21 minutes',
 				expires_at = clock_timestamp() - INTERVAL '1 minute' WHERE reservation_id = ?
 				""", first.id());
 		assertEquals("EXPIRED", orderService.ownedOrder(store, customer.id(), order.id()).status());
-		assertEquals("EXPIRED", orderService.create(store, token, first.id(), customer, false, addressId).status());
+		assertEquals("EXPIRED", deliveryOrder(store, token, first.id(), customer, false, addressId, shippingQuote.quoteId()).status());
 		jdbcTemplate.update("UPDATE shopping_carts SET expires_at = clock_timestamp() - INTERVAL '1 second' WHERE token_hash = ?",
 				TokenService.hashToken(token));
 		assertEquals("EXPIRED", orderService.ownedOrder(store, customer.id(), order.id()).status());
@@ -1983,16 +2168,18 @@ class CommercePlatformApplicationTests {
 				TokenService.hashToken(token));
 		var second = checkoutReservationService.start(store, token);
 		assertNotEquals(first.id(), second.id());
+		var secondQuote = shippingFixture(actor, store, token, second);
 		checkoutReservationService.cancel(store, token, second.id());
-		assertEquals(409, assertThrows(ResponseStatusException.class, () -> orderService.create(
-				store, token, second.id(), customer, false, addressId)).getStatusCode().value());
+		assertEquals(409, assertThrows(ResponseStatusException.class, () -> deliveryOrder(
+				store, token, second.id(), customer, false, addressId, secondQuote.quoteId())).getStatusCode().value());
 		var third = checkoutReservationService.start(store, token);
+		var thirdQuote = shippingFixture(actor, store, token, third);
 		jdbcTemplate.update("""
 				UPDATE checkout_reservations SET created_at = clock_timestamp() - INTERVAL '21 minutes',
 				expires_at = clock_timestamp() - INTERVAL '1 minute' WHERE reservation_id = ?
 				""", third.id());
-		assertEquals(409, assertThrows(ResponseStatusException.class, () -> orderService.create(
-				store, token, third.id(), customer, false, addressId)).getStatusCode().value());
+		assertEquals(409, assertThrows(ResponseStatusException.class, () -> deliveryOrder(
+				store, token, third.id(), customer, false, addressId, thirdQuote.quoteId())).getStatusCode().value());
 		assertEquals(0, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM commerce_orders WHERE reservation_id = ?",
 				Integer.class, third.id()));
 		assertEquals(1, inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId()).quantity());
@@ -2010,12 +2197,13 @@ class CommercePlatformApplicationTests {
 		String token = shoppingCartService.create(store).token();
 		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
 		var checkout = checkoutReservationService.start(store, token);
+		var shippingQuote = shippingFixture(actor, store, token, checkout);
 		CountDownLatch start = new CountDownLatch(1);
 		ExecutorService executor = Executors.newFixedThreadPool(2);
 		try {
 			List<Future<OrderService.Order>> calls = List.of(
-					executor.submit(() -> { start.await(); return orderService.create(store, token, checkout.id(), customer, false, addressId); }),
-					executor.submit(() -> { start.await(); return orderService.create(store, token, checkout.id(), customer, false, addressId); }));
+					executor.submit(() -> { start.await(); return deliveryOrder(store, token, checkout.id(), customer, false, addressId, shippingQuote.quoteId()); }),
+					executor.submit(() -> { start.await(); return deliveryOrder(store, token, checkout.id(), customer, false, addressId, shippingQuote.quoteId()); }));
 			start.countDown();
 			assertEquals(calls.getFirst().get(30, TimeUnit.SECONDS).id(), calls.getLast().get(30, TimeUnit.SECONDS).id());
 			assertEquals(1, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM commerce_orders WHERE reservation_id = ?",
@@ -2037,11 +2225,12 @@ class CommercePlatformApplicationTests {
 		String token = shoppingCartService.create(store).token();
 		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
 		var checkout = checkoutReservationService.start(store, token);
+		var shippingQuote = shippingFixture(actor, store, token, checkout);
 		CountDownLatch start = new CountDownLatch(1);
 		ExecutorService executor = Executors.newFixedThreadPool(2);
 		try {
 			Future<OrderService.Order> order = executor.submit(() -> {
-				start.await(); return orderService.create(store, token, checkout.id(), customer, false, addressId);
+				start.await(); return deliveryOrder(store, token, checkout.id(), customer, false, addressId, shippingQuote.quoteId());
 			});
 			Future<?> cancel = executor.submit(() -> {
 				start.await(); return checkoutReservationService.cancel(store, token, checkout.id());

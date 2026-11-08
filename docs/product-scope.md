@@ -334,17 +334,18 @@ that were not reserved are excluded; their status remains available through
 the checkout API. An inactive, cancelled, expired or foreign reservation
 returns `409`, including if it expires or is cancelled during the provider
 call. A missing or foreign cart token returns `404`. The response adds
-`reservationId` and `expiresAt` to `quotes` and `unavailable`. Missing
+`quoteId`, `reservationId` and `expiresAt` to `quotes` and `unavailable`. Missing
 measurements, origin and integration errors use the same responses described
 above. Normal product and variant deactivation is blocked while active
 reservations exist.
 
-The checkout quote is informational, is not persisted or bound to an address,
-and does not guarantee price or availability. Selection, revalidation against
-the delivery address, and storing and charging shipping on the order remain
-future work. Existing delivery orders still omit shipping cost; do not treat
-their totals as final shipping-inclusive prices. The provider client currently
-targets sandbox only; no real sandbox validation has been completed. The public
+The server stores available checkout services under the quote ID, tied to the
+store, reservation and destination postal code. The quote remains usable only
+while the reservation is active. It is an estimate, not a guarantee of
+provider price or availability, and is revalidated before order creation.
+Quotes and reservations are retained; cleanup is not yet implemented. Existing
+delivery orders may have no recorded shipping cost. The provider client targets
+sandbox only; no real sandbox validation has been completed. The public
 endpoints have no rate limiting, so abuse prevention and traffic limits are
 required before production exposure.
 
@@ -554,7 +555,8 @@ for an active reservation. Use the store hostname, the customer's bearer
 access token, and the `Cart-Token` header, with a JSON body such as:
 
 ```json
-{"acceptPartial":false,"addressId":"00000000-0000-0000-0000-000000000001"}
+{"acceptPartial":false,"addressId":"00000000-0000-0000-0000-000000000001",
+ "quoteId":"00000000-0000-0000-0000-000000000002","shippingServiceId":1}
 ```
 
 The order records the authenticated customer's name, email and phone at
@@ -562,7 +564,18 @@ creation, together with a snapshot of the selected saved delivery address.
 A customer-owned address is required for delivery. A profile phone is required
 for either delivery or pickup. Existing orders without delivery details remain
 readable. Omitting `fulfillmentType` retains the existing delivery behavior;
-`"DELIVERY"` can also be supplied explicitly.
+`"DELIVERY"` can also be supplied explicitly. New delivery orders require a
+quote ID and a service ID from its available options. The saved address must
+belong to the customer and its postal code must match the quotation. The server
+looks up the confirmed price and deadline, recalculates the reserved items with
+the provider, and does not trust client-supplied prices. If the chosen service is
+unavailable or its price or delivery time changed, no order is created: `409`
+returns `code: SHIPPING_QUOTE_CHANGED` and `quote` with a new quote ID, available
+and unavailable services. The customer must choose again and resubmit. If the
+address, origin or variant measurements change during the calculation, the
+request returns `409` and requires a new quotation. Provider errors return
+`503` with `SHIPPING_TEMPORARILY_UNAVAILABLE`; missing measurements return
+`409` with `ITEMS_NOT_QUOTABLE`. A missing or invalid selection returns `409`.
 
 The public `GET /api/public/pickup` uses the storefront hostname and returns
 `available: false` when pickup is disabled or not configured. When enabled it
@@ -576,7 +589,7 @@ For pickup, send:
 {"acceptPartial":false,"fulfillmentType":"PICKUP"}
 ```
 
-Do not supply `addressId` for pickup. The server verifies that the store has
+Do not supply `addressId`, `quoteId` or `shippingServiceId` for pickup. The server verifies that the store has
 enabled pickup, otherwise returns `409`. A delivery request without an
 `addressId`, a pickup request with one, or an unknown fulfillment type returns
 `400`. The order preserves the pickup address, instructions and customer phone
@@ -590,14 +603,19 @@ If any checkout item was unavailable,
 `acceptPartial` must explicitly be `true`; only fully reserved items enter the
 order. Otherwise `false` is sufficient. The response is `200` with the order,
 including the checkout price and quantity and a snapshot of product name and
-variant attributes. `total` is the sum of item prices and quantities in BRL;
-pickup adds no charge; shipping calculation has not been implemented. Prices are captured
-from checkout; names and variant attributes are captured at order creation.
+variant attributes. For delivery, `delivery.shipping` snapshots the service ID,
+name, price and delivery days. `total` is the sum of item prices and quantities
+plus shipping in BRL; pickup adds no charge. Customer and merchant lists also
+include shipping in `total`. Legacy deliveries without shipping details remain
+readable and their totals remain item-only. Prices are captured from checkout;
+names and variant attributes are captured at order creation.
 
 There is at most one order per reservation. A repeat by the same customer with
-the same `acceptPartial`, fulfillment type and `addressId` (for delivery)
+the same `acceptPartial`, fulfillment type, `addressId`, quote ID and service ID (for delivery)
 returns the original order, even if the address or pickup settings have since
-changed, including after its expiration or cancellation. A different customer,
+changed, including after its expiration or cancellation and without another
+provider call. Legacy delivery orders retain their original retry contract
+without quote or service IDs. A different customer,
 confirmation value or fulfillment selection, or
 an inactive reservation without an order, returns `409`. No request extends the reservation. The order
 is `PENDING` only while the reservation is active, becomes `EXPIRED` when the
