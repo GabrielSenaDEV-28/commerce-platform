@@ -95,6 +95,15 @@ public class ProductController {
         return VariantResponse.from(variant, service.get(actor, id));
     }
 
+    @PutMapping("/{id}/variants/{variantId}/shipping")
+    public VariantResponse updateVariantShipping(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id,
+                                                  @PathVariable UUID variantId,
+                                                  @Valid @RequestBody VariantShippingRequest request) {
+        UUID actor = actor(jwt);
+        var variant = service.updateVariantShipping(actor, id, variantId, request);
+        return VariantResponse.from(variant, service.get(actor, id));
+    }
+
     @DeleteMapping("/{id}/variants/{variantId}")
     public ResponseEntity<Void> deactivateVariant(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id,
                                                    @PathVariable UUID variantId) {

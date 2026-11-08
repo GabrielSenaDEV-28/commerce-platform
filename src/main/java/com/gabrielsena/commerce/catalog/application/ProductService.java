@@ -10,6 +10,7 @@ import com.gabrielsena.commerce.catalog.ProductVariantRepository;
 import com.gabrielsena.commerce.catalog.api.ProductRequest;
 import com.gabrielsena.commerce.catalog.api.ProductUpdateRequest;
 import com.gabrielsena.commerce.catalog.api.VariantRequest;
+import com.gabrielsena.commerce.catalog.api.VariantShippingRequest;
 import com.gabrielsena.commerce.catalog.domain.ItemType;
 import com.gabrielsena.commerce.catalog.domain.Product;
 import com.gabrielsena.commerce.catalog.domain.ProductHistory;
@@ -145,6 +146,7 @@ public class ProductService {
         if (!variant.isActive()) {
             throw notFound();
         }
+
         if (samePrice(variant.getPrice(), price)) {
             return variant;
         }
@@ -152,6 +154,30 @@ public class ProductService {
         BigDecimal old = variant.getPrice();
         variant.setPrice(price, actor, now);
         change(p, id, actor, now, "UPDATED", "price", old, price);
+        return variant;
+    }
+
+    @Transactional
+    public ProductVariant updateVariantShipping(UUID actor, UUID productId, UUID id, VariantShippingRequest request) {
+        Product p = lockProduct(productId, stores.storeFor(actor));
+        requireActive(p);
+        ProductVariant variant = variant(p, id);
+        if (!variant.isActive()) {
+            throw notFound();
+        }
+        if (samePrice(variant.getShippingWeightKg(), request.weightKg())
+                && samePrice(variant.getShippingWidthCm(), request.widthCm())
+                && samePrice(variant.getShippingHeightCm(), request.heightCm())
+                && samePrice(variant.getShippingLengthCm(), request.lengthCm())) {
+            return variant;
+        }
+        Instant now = Instant.now();
+        change(p, id, actor, now, "UPDATED", "shippingWeightKg", variant.getShippingWeightKg(), request.weightKg());
+        change(p, id, actor, now, "UPDATED", "shippingWidthCm", variant.getShippingWidthCm(), request.widthCm());
+        change(p, id, actor, now, "UPDATED", "shippingHeightCm", variant.getShippingHeightCm(), request.heightCm());
+        change(p, id, actor, now, "UPDATED", "shippingLengthCm", variant.getShippingLengthCm(), request.lengthCm());
+        variant.setShippingMeasurements(request.weightKg(), request.widthCm(), request.heightCm(),
+                request.lengthCm(), actor, now);
         return variant;
     }
 

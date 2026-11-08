@@ -26,6 +26,14 @@ public class ProductVariant {
     private String size;
     @Column(precision = 12, scale = 2)
     private BigDecimal price;
+    @Column(name = "shipping_weight_kg", precision = 8, scale = 3)
+    private BigDecimal shippingWeightKg;
+    @Column(name = "shipping_width_cm", precision = 8, scale = 2)
+    private BigDecimal shippingWidthCm;
+    @Column(name = "shipping_height_cm", precision = 8, scale = 2)
+    private BigDecimal shippingHeightCm;
+    @Column(name = "shipping_length_cm", precision = 8, scale = 2)
+    private BigDecimal shippingLengthCm;
     @Column(nullable = false)
     private boolean active;
     @Column(name = "created_at", nullable = false)
@@ -59,6 +67,16 @@ public class ProductVariant {
 
     public void setPrice(BigDecimal price, UUID actor, Instant now) {
         this.price = price;
+        this.updatedAt = now;
+        this.updatedBy = actor;
+    }
+
+    public void setShippingMeasurements(BigDecimal weightKg, BigDecimal widthCm, BigDecimal heightCm,
+                                        BigDecimal lengthCm, UUID actor, Instant now) {
+        this.shippingWeightKg = weightKg;
+        this.shippingWidthCm = widthCm;
+        this.shippingHeightCm = heightCm;
+        this.shippingLengthCm = lengthCm;
         this.updatedAt = now;
         this.updatedBy = actor;
     }
