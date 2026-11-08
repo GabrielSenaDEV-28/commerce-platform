@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -58,9 +59,10 @@ public class InventoryController {
 
     @PostMapping("/products/{productId}/variants/{variantId}/movements")
     public ResponseEntity<Movement> move(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID productId,
-                                         @PathVariable UUID variantId, @Valid @RequestBody MovementRequest request) {
+                                         @PathVariable UUID variantId, @RequestHeader("Idempotency-Key") UUID key,
+                                         @Valid @RequestBody MovementRequest request) {
         Movement movement = inventory.move(actor(jwt), productId, variantId, request.type(),
-                request.quantity().intValueExact(), request.reason());
+                request.quantity().intValueExact(), request.reason(), key);
         return ResponseEntity.status(HttpStatus.CREATED).body(movement);
     }
 

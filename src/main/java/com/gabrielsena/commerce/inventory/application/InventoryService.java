@@ -15,6 +15,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -49,18 +50,39 @@ public class InventoryService {
     }
 
     @Transactional
-    public Movement move(UUID actor, UUID productId, UUID variantId, MovementType type, int quantity, String reason) {
-        if (type == null || quantity <= 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Movement requires a positive quantity and type.");
+    public Movement move(UUID actor, UUID productId, UUID variantId, MovementType type, int quantity,
+                         String reason, UUID key) {
+        if (type == null || quantity <= 0 || key == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Movement requires a positive quantity, type and key.");
         }
         validateReason(reason);
         ProductVariant variant = catalog.getVariant(actor, productId, variantId);
+        UUID movementId = UUID.randomUUID();
+        int inserted = jdbc.update("""
+                INSERT INTO inventory_movement_requests (store_id, idempotency_key, movement_id)
+                VALUES (?, ?, ?) ON CONFLICT (store_id, idempotency_key) DO NOTHING
+                """, variant.getStoreId(), key, movementId);
+        if (inserted == 0) {
+            Movement existing = Objects.requireNonNull(jdbc.queryForObject("""
+                    SELECT m.* FROM inventory_movement_requests r
+                    JOIN inventory_movements m ON m.store_id = r.store_id AND m.movement_id = r.movement_id
+                    WHERE r.store_id = ? AND r.idempotency_key = ?
+                    """, (rs, row) -> movementRow(rs), variant.getStoreId(), key));
+            long delta = (long) existing.afterQuantity() - existing.beforeQuantity();
+            if (!existing.productId().equals(productId) || !existing.variantId().equals(variantId)
+                    || !existing.actorId().equals(actor) || !existing.type().equals(type.name())
+                    || delta != (type == MovementType.ENTRY ? quantity : -(long) quantity)
+                    || !existing.reason().equals(reason.strip())) {
+                throw conflict("Idempotency key already used for a different movement.");
+            }
+            return existing;
+        }
         Balance before = lockBalance(variant);
         long result = type == MovementType.ENTRY ? (long) before.quantity() + quantity : (long) before.quantity() - quantity;
         if (result < 0 || result > Integer.MAX_VALUE) {
             throw conflict("Stock quantity is outside the permitted range.");
         }
-        return recordMovement(variant, null, actor, type.name(), before, (int) result, reason);
+        return recordMovement(movementId, variant, null, actor, type.name(), before, (int) result, reason);
     }
 
     @Transactional
@@ -124,7 +146,7 @@ public class InventoryService {
         if (before.version() != expectedVersion) {
             throw conflict("Stock changed since it was observed. Review the count.");
         }
-        return recordMovement(variant, auditId, actor, "COUNT", before, quantity, reason);
+        return recordMovement(UUID.randomUUID(), variant, auditId, actor, "COUNT", before, quantity, reason);
     }
 
     @Transactional(readOnly = true)
@@ -168,10 +190,9 @@ public class InventoryService {
                 variant.getStoreId(), variant.getProductId(), variant.getId()));
     }
 
-    private Movement recordMovement(ProductVariant variant, UUID auditId, UUID actor, String type,
+    private Movement recordMovement(UUID id, ProductVariant variant, UUID auditId, UUID actor, String type,
                                     Balance before, int quantity, String reason) {
-        UUID id = UUID.randomUUID();
-        Instant now = Instant.now();
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
         jdbc.update("""
                 UPDATE inventory_balances SET quantity = ?, version = version + 1
                 WHERE store_id = ? AND product_id = ? AND variant_id = ?

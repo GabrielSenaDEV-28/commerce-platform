@@ -234,6 +234,18 @@ accepts `{"type":"ENTRY","quantity":5,"reason":"Delivery"}` or an `EXIT`.
 `GET` on `/movements` returns paginated history. Quantities are whole numbers
 from zero through 2,147,483,647; an entry or exit requires at least one unit.
 
+Every entry or exit requires an `Idempotency-Key` header containing a UUID.
+The client generates a new UUID for each distinct movement and retains it for
+all retries, including after a timeout. Repeating the same successful request
+with the same key returns the original `201` response without changing stock
+or history again. Reusing the key in the same store for a different actor,
+product, variant, movement type, quantity or reason returns `409`. Reasons
+are compared after trimming leading and trailing whitespace. Keys are retained
+with their movement history; failed transactions do not reserve a key. Keys
+are scoped to the authenticated store, not supplied as a store identifier.
+Previously recorded movements do not have a retry key. This protection applies
+to manual entries and exits, not audit counts or future checkout operations.
+
 `POST /api/inventory/audits` opens an audit, `GET /api/inventory/audits` lists
 audits, and `GET /api/inventory/audits/{id}` retrieves one. Only one audit per
 store may be open. Opening and closing record the actor and time.

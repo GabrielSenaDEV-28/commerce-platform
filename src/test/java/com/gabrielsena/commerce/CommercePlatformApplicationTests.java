@@ -655,14 +655,14 @@ class CommercePlatformApplicationTests {
 		mockMvc.perform(get(path)).andExpect(status().isUnauthorized());
 		mockMvc.perform(get(path).header("Authorization", token)).andExpect(status().isOk())
 				.andExpect(jsonPath("$.quantity").value(0)).andExpect(jsonPath("$.version").value(0));
-		mockMvc.perform(post(path + "/movements").header("Authorization", token).contentType(APPLICATION_JSON)
+		mockMvc.perform(post(path + "/movements").header("Authorization", token).header("Idempotency-Key", UUID.randomUUID()).contentType(APPLICATION_JSON)
 						.content("{\"type\":\"ENTRY\",\"quantity\":10,\"reason\":\"Delivery\"}"))
 				.andExpect(status().isCreated()).andExpect(jsonPath("$.beforeQuantity").value(0))
 				.andExpect(jsonPath("$.afterQuantity").value(10));
-		mockMvc.perform(post(path + "/movements").header("Authorization", token).contentType(APPLICATION_JSON)
+		mockMvc.perform(post(path + "/movements").header("Authorization", token).header("Idempotency-Key", UUID.randomUUID()).contentType(APPLICATION_JSON)
 						.content("{\"type\":\"EXIT\",\"quantity\":2,\"reason\":\"Damaged\"}"))
 				.andExpect(status().isCreated()).andExpect(jsonPath("$.afterQuantity").value(8));
-		mockMvc.perform(post(path + "/movements").header("Authorization", token).contentType(APPLICATION_JSON)
+		mockMvc.perform(post(path + "/movements").header("Authorization", token).header("Idempotency-Key", UUID.randomUUID()).contentType(APPLICATION_JSON)
 						.content("{\"type\":\"EXIT\",\"quantity\":9,\"reason\":\"Damaged\"}"))
 				.andExpect(status().isConflict());
 		String auditId = JsonPath.read(mockMvc.perform(post("/api/inventory/audits").header("Authorization", token))
@@ -713,11 +713,11 @@ class CommercePlatformApplicationTests {
 				"{\"type\":\"ENTRY\",\"quantity\":2147483648,\"reason\":\"test\"}",
 				"{\"type\":\"ENTRY\",\"quantity\":1,\"reason\":\" \"}",
 				"{\"type\":\"COUNT\",\"quantity\":1,\"reason\":\"test\"}")) {
-			mockMvc.perform(post(path + "/movements").header("Authorization", token)
+			mockMvc.perform(post(path + "/movements").header("Authorization", token).header("Idempotency-Key", UUID.randomUUID())
 							.contentType(APPLICATION_JSON).content(body)).andExpect(status().isBadRequest());
 		}
 		mockMvc.perform(get(path).header("Authorization", otherToken)).andExpect(status().isNotFound());
-		mockMvc.perform(post(path + "/movements").header("Authorization", otherToken).contentType(APPLICATION_JSON)
+		mockMvc.perform(post(path + "/movements").header("Authorization", otherToken).header("Idempotency-Key", UUID.randomUUID()).contentType(APPLICATION_JSON)
 						.content("{\"type\":\"ENTRY\",\"quantity\":1,\"reason\":\"test\"}"))
 				.andExpect(status().isNotFound());
 		mockMvc.perform(get(path + "/movements").header("Authorization", otherToken)).andExpect(status().isNotFound());
@@ -749,7 +749,7 @@ class CommercePlatformApplicationTests {
 		mockMvc.perform(get("/api/inventory/audits").header("Authorization", token).param("size", "101"))
 				.andExpect(status().isBadRequest());
 		productService.setActive(owner.id(), fixture.productId(), false);
-		mockMvc.perform(post(path + "/movements").header("Authorization", token).contentType(APPLICATION_JSON)
+		mockMvc.perform(post(path + "/movements").header("Authorization", token).header("Idempotency-Key", UUID.randomUUID()).contentType(APPLICATION_JSON)
 						.content("{\"type\":\"ENTRY\",\"quantity\":1,\"reason\":\"test\"}"))
 				.andExpect(status().isCreated());
 	}
@@ -758,15 +758,15 @@ class CommercePlatformApplicationTests {
 	void inventoryShouldSerializeConcurrentExitsAndAuditOpenings() throws Exception {
 		CatalogActor actor = catalogActor();
 		InventoryFixture fixture = inventoryFixture(actor);
-		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Delivery");
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Delivery", UUID.randomUUID());
 		CountDownLatch start = new CountDownLatch(1);
 		ExecutorService executor = Executors.newFixedThreadPool(2);
 		try {
 			List<Future<?>> exits = List.of(
 					executor.submit(() -> { start.await(); return inventoryService.move(actor.id(), fixture.productId(),
-							fixture.variantId(), MovementType.EXIT, 1, "Damage"); }),
+							fixture.variantId(), MovementType.EXIT, 1, "Damage", UUID.randomUUID()); }),
 					executor.submit(() -> { start.await(); return inventoryService.move(actor.id(), fixture.productId(),
-							fixture.variantId(), MovementType.EXIT, 1, "Damage"); }));
+							fixture.variantId(), MovementType.EXIT, 1, "Damage", UUID.randomUUID()); }));
 			start.countDown();
 			assertOneSuccessOneConflict(exits);
 			assertEquals(0, inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId()).quantity());
@@ -781,13 +781,106 @@ class CommercePlatformApplicationTests {
 	}
 
 	@Test
+	void inventoryMovementRetriesShouldReturnOriginalResultWithoutChangingStock() throws Exception {
+		CatalogActor actor = catalogActor();
+		CatalogActor other = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		InventoryFixture otherFixture = inventoryFixture(other);
+		String token = "Bearer " + actor.token();
+		String path = "/api/inventory/products/" + fixture.productId() + "/variants/" + fixture.variantId() + "/movements";
+		String request = "{\"type\":\"ENTRY\",\"quantity\":5,\"reason\":\"Delivery\"}";
+		UUID key = UUID.randomUUID();
+		mockMvc.perform(post(path).header("Authorization", token).contentType(APPLICATION_JSON).content(request))
+				.andExpect(status().isBadRequest());
+		mockMvc.perform(post(path).header("Authorization", token).header("Idempotency-Key", "invalid")
+						.contentType(APPLICATION_JSON).content(request)).andExpect(status().isBadRequest());
+		String first = mockMvc.perform(post(path).header("Authorization", token).header("Idempotency-Key", key)
+						.contentType(APPLICATION_JSON).content(request))
+				.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+		String retry = mockMvc.perform(post(path).header("Authorization", token).header("Idempotency-Key", key)
+						.contentType(APPLICATION_JSON).content(request))
+				.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+		assertEquals(first, retry);
+		for (String changed : List.of("{\"type\":\"ENTRY\",\"quantity\":6,\"reason\":\"Delivery\"}",
+				"{\"type\":\"EXIT\",\"quantity\":5,\"reason\":\"Delivery\"}",
+				"{\"type\":\"ENTRY\",\"quantity\":5,\"reason\":\"Different\"}")) {
+			mockMvc.perform(post(path).header("Authorization", token).header("Idempotency-Key", key)
+							.contentType(APPLICATION_JSON).content(changed)).andExpect(status().isConflict());
+		}
+		UUID typeId = jdbcTemplate.queryForObject("SELECT item_type_id FROM catalog_products WHERE product_id = ?",
+				UUID.class, fixture.productId());
+		Product second = productService.create(actor.id(), new ProductRequest(typeId, "SKU-2", "Second",
+				"Description", BigDecimal.TEN, List.of(new VariantRequest(null, null, null))));
+		UUID secondVariant = jdbcTemplate.queryForObject("SELECT variant_id FROM catalog_product_variants WHERE product_id = ?",
+				UUID.class, second.getId());
+		String secondPath = "/api/inventory/products/" + second.getId() + "/variants/" + secondVariant + "/movements";
+		mockMvc.perform(post(secondPath).header("Authorization", token).header("Idempotency-Key", key)
+						.contentType(APPLICATION_JSON).content(request)).andExpect(status().isConflict());
+		String otherPath = "/api/inventory/products/" + otherFixture.productId() + "/variants/" + otherFixture.variantId() + "/movements";
+		mockMvc.perform(post(otherPath).header("Authorization", "Bearer " + other.token()).header("Idempotency-Key", key)
+						.contentType(APPLICATION_JSON).content(request)).andExpect(status().isCreated());
+		mockMvc.perform(post(path).header("Authorization", "Bearer " + other.token()).header("Idempotency-Key", key)
+						.contentType(APPLICATION_JSON).content(request)).andExpect(status().isNotFound());
+		UUID exitKey = UUID.randomUUID();
+		String exit = "{\"type\":\"EXIT\",\"quantity\":2,\"reason\":\"Damaged\"}";
+		String exitFirst = mockMvc.perform(post(path).header("Authorization", token).header("Idempotency-Key", exitKey)
+						.contentType(APPLICATION_JSON).content(exit))
+				.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+		String exitRetry = mockMvc.perform(post(path).header("Authorization", token).header("Idempotency-Key", exitKey)
+						.contentType(APPLICATION_JSON).content(exit))
+				.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+		assertEquals(exitFirst, exitRetry);
+		assertEquals(3, inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId()).quantity());
+		assertEquals(2, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM inventory_movements WHERE variant_id = ?",
+				Integer.class, fixture.variantId()));
+		assertEquals(first, mockMvc.perform(post(path).header("Authorization", token).header("Idempotency-Key", key)
+						.contentType(APPLICATION_JSON).content(request))
+				.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString());
+		UUID failedKey = UUID.randomUUID();
+		String largeExit = "{\"type\":\"EXIT\",\"quantity\":6,\"reason\":\"Damaged\"}";
+		mockMvc.perform(post(path).header("Authorization", token).header("Idempotency-Key", failedKey)
+						.contentType(APPLICATION_JSON).content(largeExit)).andExpect(status().isConflict());
+		mockMvc.perform(post(path).header("Authorization", token).header("Idempotency-Key", UUID.randomUUID())
+						.contentType(APPLICATION_JSON).content(request)).andExpect(status().isCreated());
+		mockMvc.perform(post(path).header("Authorization", token).header("Idempotency-Key", failedKey)
+						.contentType(APPLICATION_JSON).content(largeExit)).andExpect(status().isCreated());
+		assertEquals(2, inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId()).quantity());
+	}
+
+	@Test
+	void simultaneousInventoryMovementRetriesShouldApplyOnlyOnce() throws Exception {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		UUID key = UUID.randomUUID();
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		try {
+			Future<InventoryService.Movement> first = executor.submit(() -> {
+				start.await();
+				return inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 5, "Delivery", key);
+			});
+			Future<InventoryService.Movement> second = executor.submit(() -> {
+				start.await();
+				return inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 5, "Delivery", key);
+			});
+			start.countDown();
+			assertEquals(first.get(15, TimeUnit.SECONDS), second.get(15, TimeUnit.SECONDS));
+			assertEquals(5, inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId()).quantity());
+			assertEquals(1, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM inventory_movements WHERE variant_id = ?",
+					Integer.class, fixture.variantId()));
+		} finally {
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
 	void inventoryAuditShouldRejectAStaleCountEvenIfQuantityReturnsToSameValue() {
 		CatalogActor actor = catalogActor();
 		InventoryFixture fixture = inventoryFixture(actor);
 		var audit = inventoryService.openAudit(actor.id());
 		var observed = inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId());
-		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Delivery");
-		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.EXIT, 1, "Damage");
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Delivery", UUID.randomUUID());
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.EXIT, 1, "Damage", UUID.randomUUID());
 		ResponseStatusException conflict = assertThrows(ResponseStatusException.class, () -> inventoryService.count(
 				actor.id(), audit.id(), fixture.productId(), fixture.variantId(), observed.version(), 5, "Count"));
 		assertEquals(409, conflict.getStatusCode().value());
@@ -837,11 +930,16 @@ class CommercePlatformApplicationTests {
 				FOR EACH ROW EXECUTE FUNCTION commerce_test_fail_inventory_history()
 				""");
 		try {
+			UUID key = UUID.randomUUID();
 			assertThrows(DataAccessException.class, () -> inventoryService.move(actor.id(), fixture.productId(),
-					fixture.variantId(), MovementType.ENTRY, 10, "force-inventory-failure"));
+					fixture.variantId(), MovementType.ENTRY, 10, "force-inventory-failure", key));
 			assertEquals(0, inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId()).quantity());
 			assertEquals(0, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM inventory_balances WHERE variant_id = ?",
 					Integer.class, fixture.variantId()));
+			assertEquals(0, jdbcTemplate.queryForObject(
+					"SELECT COUNT(*) FROM inventory_movement_requests WHERE idempotency_key = ?", Integer.class, key));
+			assertEquals(10, inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(),
+					MovementType.ENTRY, 10, "Retry", key).afterQuantity());
 		} finally {
 			jdbcTemplate.execute("DROP TRIGGER commerce_test_fail_inventory_history ON inventory_movements");
 			jdbcTemplate.execute("DROP FUNCTION commerce_test_fail_inventory_history()");
