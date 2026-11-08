@@ -6,6 +6,8 @@ import com.gabrielsena.commerce.inventory.application.InventoryService.Audit;
 import com.gabrielsena.commerce.inventory.application.InventoryService.Balance;
 import com.gabrielsena.commerce.inventory.application.InventoryService.Movement;
 import com.gabrielsena.commerce.inventory.application.InventoryService.MovementType;
+import com.gabrielsena.commerce.inventory.application.InventoryService.ProductStock;
+import com.gabrielsena.commerce.inventory.application.InventoryService.VariantStock;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.Digits;
@@ -51,6 +53,24 @@ public class InventoryController {
                                @NotNull @Min(0) @Digits(integer = 10, fraction = 0)
                                @DecimalMax("2147483647") BigDecimal quantity,
                                @NotBlank @Size(max = 500) String reason) { }
+
+    @GetMapping("/products")
+    public PageResponse<ProductStock> productStocks(@AuthenticationPrincipal Jwt jwt,
+            @RequestParam(defaultValue = "true") boolean active,
+            @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "20") int size) {
+        return PageResponse.from(inventory.productStocks(actor(jwt), active, pageable(page, size, "name", "id")));
+    }
+
+    @GetMapping("/products/{productId}")
+    public ProductStock productStock(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID productId) {
+        return inventory.productStock(actor(jwt), productId);
+    }
+
+    @GetMapping("/products/{productId}/variants")
+    public PageResponse<VariantStock> variantStocks(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID productId,
+            @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "20") int size) {
+        return PageResponse.from(inventory.variantStocks(actor(jwt), productId, pageable(page, size, "id")));
+    }
 
     @GetMapping("/products/{productId}/variants/{variantId}")
     public Balance balance(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID productId, @PathVariable UUID variantId) {
