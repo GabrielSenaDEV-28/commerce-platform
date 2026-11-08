@@ -251,10 +251,15 @@ each dimension up to whole centimeters without changing the catalog. It uses
 the provider's customized price and delivery time and retains Correios
 services. Provider failures and individual unavailable services are distinct;
 the quotation client is not yet connected to an endpoint or checkout.
-The planned OAuth development uses simulated provider responses first; creating
-the sandbox account and application and validating authorization and quotation
-against the real sandbox are deferred until later in the same development
-branch. Do not treat simulated responses as real sandbox validation.
+**Pending sandbox validation:** Create a sandbox account and application,
+configure the callback and credentials securely, and validate the OAuth
+authorization, token renewal and quotation against the real sandbox. This
+work is deferred until after this initial implementation is merged. The
+quotation client is not yet connected to the stored merchant authorization, so
+an end-to-end quotation flow must be implemented or tested separately.
+Simulated provider responses do not establish sandbox compatibility; do not
+enable this integration for production before validating it and addressing
+any provider-specific requirements.
 Provider contract reference:
 [Melhor Envio freight calculation](https://docs.melhorenvio.com.br/reference/calculo-de-fretes-por-produtos).
 
