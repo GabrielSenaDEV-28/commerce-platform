@@ -1,4 +1,4 @@
-package com.gabrielsena.commerce.catalog.api;
+package com.gabrielsena.commerce.api;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -9,11 +9,11 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.util.UUID;
 
-final class CatalogApiSupport {
-    private CatalogApiSupport() {
+public final class ApiRequestSupport {
+    private ApiRequestSupport() {
     }
 
-    static UUID actor(Jwt jwt) {
+    public static UUID actor(Jwt jwt) {
         if (jwt == null || jwt.getSubject() == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);
         }
@@ -24,7 +24,7 @@ final class CatalogApiSupport {
         }
     }
 
-    static Pageable pageable(int page, int size, String... sort) {
+    public static Pageable pageable(int page, int size, String... sort) {
         if (page < 0 || size < 1 || size > 100) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid page or size");
         }

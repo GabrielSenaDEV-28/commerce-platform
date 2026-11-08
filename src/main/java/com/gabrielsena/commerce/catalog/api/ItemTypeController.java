@@ -1,5 +1,6 @@
 package com.gabrielsena.commerce.catalog.api;
 
+import com.gabrielsena.commerce.api.PageResponse;
 import com.gabrielsena.commerce.catalog.application.ItemTypeService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -18,8 +19,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
 
-import static com.gabrielsena.commerce.catalog.api.CatalogApiSupport.actor;
-import static com.gabrielsena.commerce.catalog.api.CatalogApiSupport.pageable;
+import static com.gabrielsena.commerce.api.ApiRequestSupport.actor;
+import static com.gabrielsena.commerce.api.ApiRequestSupport.pageable;
 
 @RestController
 @RequestMapping("/api/item-types")

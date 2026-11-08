@@ -26,6 +26,8 @@ import com.gabrielsena.commerce.catalog.domain.ItemType;
 import com.gabrielsena.commerce.catalog.domain.ItemTypeValues;
 import com.gabrielsena.commerce.catalog.domain.Product;
 import com.gabrielsena.commerce.catalog.domain.SizeFormat;
+import com.gabrielsena.commerce.inventory.application.InventoryService;
+import com.gabrielsena.commerce.inventory.application.InventoryService.MovementType;
 import com.gabrielsena.commerce.store.StoreRepository;
 import com.gabrielsena.commerce.store.domain.Store;
 import com.gabrielsena.commerce.store.domain.Subdomain;
@@ -46,6 +48,7 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.server.ResponseStatusException;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 import java.net.URI;
@@ -117,6 +120,9 @@ class CommercePlatformApplicationTests {
 
 	@Autowired
 	private ProductService productService;
+
+	@Autowired
+	private InventoryService inventoryService;
 
 	@Autowired
 	private JwtEncoder jwtEncoder;
@@ -638,6 +644,236 @@ class CommercePlatformApplicationTests {
 			jdbcTemplate.execute("DROP TRIGGER commerce_test_fail_product_history ON catalog_product_history");
 			jdbcTemplate.execute("DROP FUNCTION commerce_test_fail_product_history()");
 		}
+	}
+
+	@Test
+	void inventoryShouldTrackMovementsAndFullAuditHistory() throws Exception {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		String token = "Bearer " + actor.token();
+		String path = "/api/inventory/products/" + fixture.productId() + "/variants/" + fixture.variantId();
+		mockMvc.perform(get(path)).andExpect(status().isUnauthorized());
+		mockMvc.perform(get(path).header("Authorization", token)).andExpect(status().isOk())
+				.andExpect(jsonPath("$.quantity").value(0)).andExpect(jsonPath("$.version").value(0));
+		mockMvc.perform(post(path + "/movements").header("Authorization", token).contentType(APPLICATION_JSON)
+						.content("{\"type\":\"ENTRY\",\"quantity\":10,\"reason\":\"Delivery\"}"))
+				.andExpect(status().isCreated()).andExpect(jsonPath("$.beforeQuantity").value(0))
+				.andExpect(jsonPath("$.afterQuantity").value(10));
+		mockMvc.perform(post(path + "/movements").header("Authorization", token).contentType(APPLICATION_JSON)
+						.content("{\"type\":\"EXIT\",\"quantity\":2,\"reason\":\"Damaged\"}"))
+				.andExpect(status().isCreated()).andExpect(jsonPath("$.afterQuantity").value(8));
+		mockMvc.perform(post(path + "/movements").header("Authorization", token).contentType(APPLICATION_JSON)
+						.content("{\"type\":\"EXIT\",\"quantity\":9,\"reason\":\"Damaged\"}"))
+				.andExpect(status().isConflict());
+		String auditId = JsonPath.read(mockMvc.perform(post("/api/inventory/audits").header("Authorization", token))
+				.andExpect(status().isCreated()).andExpect(jsonPath("$.openedBy").value(actor.id().toString()))
+				.andReturn().getResponse().getContentAsString(), "$.id");
+		mockMvc.perform(post("/api/inventory/audits").header("Authorization", token)).andExpect(status().isConflict());
+		String count = "{\"productId\":\"%s\",\"variantId\":\"%s\",\"expectedVersion\":2,\"quantity\":7,\"reason\":\"Physical count\"}"
+				.formatted(fixture.productId(), fixture.variantId());
+		mockMvc.perform(post("/api/inventory/audits/{id}/counts", auditId).header("Authorization", token)
+						.contentType(APPLICATION_JSON).content(count))
+				.andExpect(status().isCreated()).andExpect(jsonPath("$.beforeQuantity").value(8))
+				.andExpect(jsonPath("$.afterQuantity").value(7)).andExpect(jsonPath("$.auditId").value(auditId));
+		mockMvc.perform(post("/api/inventory/audits/{id}/counts", auditId).header("Authorization", token)
+						.contentType(APPLICATION_JSON).content(count)).andExpect(status().isConflict());
+		mockMvc.perform(get(path).header("Authorization", token)).andExpect(jsonPath("$.quantity").value(7))
+				.andExpect(jsonPath("$.version").value(3));
+		mockMvc.perform(get(path + "/movements").header("Authorization", token).param("size", "2"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(3))
+				.andExpect(jsonPath("$.totalPages").value(2));
+		mockMvc.perform(get("/api/inventory/audits/{id}/counts", auditId).header("Authorization", token))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1))
+				.andExpect(jsonPath("$.content[0].actorId").value(actor.id().toString()));
+		String recount = "{\"productId\":\"%s\",\"variantId\":\"%s\",\"expectedVersion\":3,\"quantity\":7,\"reason\":\"Recount\"}"
+				.formatted(fixture.productId(), fixture.variantId());
+		mockMvc.perform(post("/api/inventory/audits/{id}/counts", auditId).header("Authorization", token)
+						.contentType(APPLICATION_JSON).content(recount)).andExpect(status().isCreated());
+		mockMvc.perform(get("/api/inventory/audits/{id}/counts", auditId).header("Authorization", token))
+				.andExpect(jsonPath("$.totalElements").value(2));
+		mockMvc.perform(post("/api/inventory/audits/{id}/close", auditId).header("Authorization", token))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.closedBy").value(actor.id().toString()))
+				.andExpect(jsonPath("$.closedAt").isNotEmpty());
+		mockMvc.perform(post("/api/inventory/audits/{id}/counts", auditId).header("Authorization", token)
+						.contentType(APPLICATION_JSON).content(count)).andExpect(status().isConflict());
+		mockMvc.perform(post("/api/inventory/audits").header("Authorization", token)).andExpect(status().isCreated());
+	}
+
+	@Test
+	void inventoryShouldValidateRequestsAndEnforceTenantIsolation() throws Exception {
+		CatalogActor owner = catalogActor();
+		CatalogActor other = catalogActor();
+		InventoryFixture fixture = inventoryFixture(owner);
+		String token = "Bearer " + owner.token();
+		String otherToken = "Bearer " + other.token();
+		String path = "/api/inventory/products/" + fixture.productId() + "/variants/" + fixture.variantId();
+		for (String body : List.of("{\"type\":\"ENTRY\",\"quantity\":0,\"reason\":\"test\"}",
+				"{\"type\":\"EXIT\",\"quantity\":-1,\"reason\":\"test\"}",
+				"{\"type\":\"ENTRY\",\"quantity\":1.5,\"reason\":\"test\"}",
+				"{\"type\":\"ENTRY\",\"quantity\":2147483648,\"reason\":\"test\"}",
+				"{\"type\":\"ENTRY\",\"quantity\":1,\"reason\":\" \"}",
+				"{\"type\":\"COUNT\",\"quantity\":1,\"reason\":\"test\"}")) {
+			mockMvc.perform(post(path + "/movements").header("Authorization", token)
+							.contentType(APPLICATION_JSON).content(body)).andExpect(status().isBadRequest());
+		}
+		mockMvc.perform(get(path).header("Authorization", otherToken)).andExpect(status().isNotFound());
+		mockMvc.perform(post(path + "/movements").header("Authorization", otherToken).contentType(APPLICATION_JSON)
+						.content("{\"type\":\"ENTRY\",\"quantity\":1,\"reason\":\"test\"}"))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get(path + "/movements").header("Authorization", otherToken)).andExpect(status().isNotFound());
+		UUID merchantId = merchantAccountRepository.findById(owner.id()).orElseThrow().getMerchantId();
+		mockMvc.perform(get(path).header("Authorization", "Bearer " + tokenWithClaims(other.id(), merchantId)))
+				.andExpect(status().isNotFound());
+		String auditId = JsonPath.read(mockMvc.perform(post("/api/inventory/audits").header("Authorization", token))
+				.andReturn().getResponse().getContentAsString(), "$.id");
+		mockMvc.perform(post("/api/inventory/audits/{id}/counts", auditId).header("Authorization", token)
+						.contentType(APPLICATION_JSON).content("{\"productId\":\"%s\",\"variantId\":\"%s\",\"expectedVersion\":0,\"quantity\":1.5,\"reason\":\"test\"}"
+								.formatted(fixture.productId(), fixture.variantId())))
+				.andExpect(status().isBadRequest());
+		String otherAuditId = JsonPath.read(mockMvc.perform(post("/api/inventory/audits").header("Authorization", otherToken))
+				.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(), "$.id");
+		mockMvc.perform(post("/api/inventory/audits/{id}/counts", otherAuditId).header("Authorization", otherToken)
+						.contentType(APPLICATION_JSON).content("{\"productId\":\"%s\",\"variantId\":\"%s\",\"expectedVersion\":0,\"quantity\":1,\"reason\":\"test\"}"
+								.formatted(fixture.productId(), fixture.variantId())))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get("/api/inventory/audits/{id}", auditId).header("Authorization", otherToken))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get("/api/inventory/audits/{id}/counts", auditId).header("Authorization", otherToken))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(post("/api/inventory/audits/{id}/close", auditId).header("Authorization", otherToken))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(post("/api/inventory/audits/{id}/counts", auditId).header("Authorization", otherToken)
+						.contentType(APPLICATION_JSON).content("{\"productId\":\"%s\",\"variantId\":\"%s\",\"expectedVersion\":0,\"quantity\":1,\"reason\":\"test\"}"
+								.formatted(fixture.productId(), fixture.variantId())))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get("/api/inventory/audits").header("Authorization", token).param("size", "101"))
+				.andExpect(status().isBadRequest());
+		productService.setActive(owner.id(), fixture.productId(), false);
+		mockMvc.perform(post(path + "/movements").header("Authorization", token).contentType(APPLICATION_JSON)
+						.content("{\"type\":\"ENTRY\",\"quantity\":1,\"reason\":\"test\"}"))
+				.andExpect(status().isCreated());
+	}
+
+	@Test
+	void inventoryShouldSerializeConcurrentExitsAndAuditOpenings() throws Exception {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Delivery");
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		try {
+			List<Future<?>> exits = List.of(
+					executor.submit(() -> { start.await(); return inventoryService.move(actor.id(), fixture.productId(),
+							fixture.variantId(), MovementType.EXIT, 1, "Damage"); }),
+					executor.submit(() -> { start.await(); return inventoryService.move(actor.id(), fixture.productId(),
+							fixture.variantId(), MovementType.EXIT, 1, "Damage"); }));
+			start.countDown();
+			assertOneSuccessOneConflict(exits);
+			assertEquals(0, inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId()).quantity());
+			CountDownLatch auditStart = new CountDownLatch(1);
+			List<Future<?>> audits = List.of(executor.submit(() -> { auditStart.await(); return inventoryService.openAudit(actor.id()); }),
+					executor.submit(() -> { auditStart.await(); return inventoryService.openAudit(actor.id()); }));
+			auditStart.countDown();
+			assertOneSuccessOneConflict(audits);
+		} finally {
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
+	void inventoryAuditShouldRejectAStaleCountEvenIfQuantityReturnsToSameValue() {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		var audit = inventoryService.openAudit(actor.id());
+		var observed = inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId());
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Delivery");
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.EXIT, 1, "Damage");
+		ResponseStatusException conflict = assertThrows(ResponseStatusException.class, () -> inventoryService.count(
+				actor.id(), audit.id(), fixture.productId(), fixture.variantId(), observed.version(), 5, "Count"));
+		assertEquals(409, conflict.getStatusCode().value());
+		assertEquals(0, inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId()).quantity());
+	}
+
+	@Test
+	void inventoryAuditShouldRejectConcurrentCountsOfTheSameVersion() throws Exception {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		var audit = inventoryService.openAudit(actor.id());
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		try {
+			List<Future<?>> counts = List.of(
+					executor.submit(() -> { start.await(); return inventoryService.count(actor.id(), audit.id(),
+							fixture.productId(), fixture.variantId(), 0, 5, "First count"); }),
+					executor.submit(() -> { start.await(); return inventoryService.count(actor.id(), audit.id(),
+							fixture.productId(), fixture.variantId(), 0, 6, "Second count"); }));
+			start.countDown();
+			assertOneSuccessOneConflict(counts);
+			assertEquals(1, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM inventory_movements WHERE audit_id = ?",
+					Integer.class, audit.id()));
+		} finally {
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
+	void inventoryMovementAndBalanceShouldRollbackTogether() {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		jdbcTemplate.execute("""
+				CREATE OR REPLACE FUNCTION commerce_test_fail_inventory_history()
+				RETURNS trigger LANGUAGE plpgsql AS $$
+				BEGIN
+					IF NEW.reason = 'force-inventory-failure' THEN
+						RAISE EXCEPTION 'Simulated inventory history failure';
+					END IF;
+					RETURN NEW;
+				END;
+				$$
+				""");
+		jdbcTemplate.execute("""
+				CREATE TRIGGER commerce_test_fail_inventory_history
+				BEFORE INSERT ON inventory_movements
+				FOR EACH ROW EXECUTE FUNCTION commerce_test_fail_inventory_history()
+				""");
+		try {
+			assertThrows(DataAccessException.class, () -> inventoryService.move(actor.id(), fixture.productId(),
+					fixture.variantId(), MovementType.ENTRY, 10, "force-inventory-failure"));
+			assertEquals(0, inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId()).quantity());
+			assertEquals(0, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM inventory_balances WHERE variant_id = ?",
+					Integer.class, fixture.variantId()));
+		} finally {
+			jdbcTemplate.execute("DROP TRIGGER commerce_test_fail_inventory_history ON inventory_movements");
+			jdbcTemplate.execute("DROP FUNCTION commerce_test_fail_inventory_history()");
+		}
+	}
+
+	private void assertOneSuccessOneConflict(List<Future<?>> results) throws Exception {
+		int succeeded = 0;
+		int conflicted = 0;
+		for (Future<?> result : results) {
+			try {
+				result.get(15, TimeUnit.SECONDS);
+				succeeded++;
+			} catch (ExecutionException exception) {
+				ResponseStatusException cause = assertInstanceOf(ResponseStatusException.class, exception.getCause());
+				assertEquals(409, cause.getStatusCode().value());
+				conflicted++;
+			}
+		}
+		assertEquals(1, succeeded);
+		assertEquals(1, conflicted);
+	}
+
+	private record InventoryFixture(UUID productId, UUID variantId) { }
+
+	private InventoryFixture inventoryFixture(CatalogActor actor) {
+		ItemType type = itemTypeService.create(actor.id(), new ItemTypeValues("Simple", false, false, null));
+		Product product = productService.create(actor.id(), new ProductRequest(type.getId(), "SKU", "Product",
+				"Description", BigDecimal.TEN, List.of(new VariantRequest(null, null, null))));
+		UUID variant = jdbcTemplate.queryForObject(
+				"SELECT variant_id FROM catalog_product_variants WHERE product_id = ?", UUID.class, product.getId());
+		return new InventoryFixture(product.getId(), variant);
 	}
 
 	private Product createProductAfterStart(CountDownLatch start, UUID actor, UUID type, String sku) throws InterruptedException {

@@ -1,4 +1,4 @@
-package com.gabrielsena.commerce.catalog.api;
+package com.gabrielsena.commerce.api;
 
 import org.springframework.data.domain.Page;
 

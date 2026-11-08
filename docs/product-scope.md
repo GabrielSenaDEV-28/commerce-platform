@@ -120,9 +120,10 @@ production exposure requires rate limiting and an abuse-prevention decision.
 
 ### Catalog and planned inventory management
 
-The item-type and product management APIs described below are implemented.
-Inventory, photos, management screens, promotions, and store-member permissions
-remain planned.
+The item-type, product, manual inventory, and inventory audit APIs described
+below are implemented. Inventory reservations, automatic sale deductions,
+photos, management screens, promotions, and store-member permissions remain
+planned.
 
 #### Item types and variants
 
@@ -219,15 +220,51 @@ For example, `POST /api/products` accepts:
 }
 ```
 
-The merchant will be able to add and manage stock for a selected variant. The management
-screen lists products with their SKU, photo, description, and total available
-stock, and lets the merchant inspect the available stock for each variant. For
-example, a product with three `preta / P` units and four `amarela / M` units
-has seven available units in total.
+The authenticated inventory API manages physical stock per variant. A variant
+starts at zero, including variants created before inventory was introduced.
+The merchant may record positive whole-unit entries and exits with a reason;
+stock cannot become negative. Inactive products and variants retain their
+physical stock and can still be counted and adjusted; their stock is not
+available for sale while inactive. Each operation records the actor, time,
+reason, and before/after quantities in the same transaction.
 
-Photo storage and management, and detailed stock adjustment rules require
-decisions before implementation. Product IDs provide a stable identity for
-future photo associations; no photo storage is implemented in this block.
+`GET /api/inventory/products/{productId}/variants/{variantId}` returns
+`quantity` and `version`. `POST` to the same path followed by `/movements`
+accepts `{"type":"ENTRY","quantity":5,"reason":"Delivery"}` or an `EXIT`.
+`GET` on `/movements` returns paginated history. Quantities are whole numbers
+from zero through 2,147,483,647; an entry or exit requires at least one unit.
+
+`POST /api/inventory/audits` opens an audit, `GET /api/inventory/audits` lists
+audits, and `GET /api/inventory/audits/{id}` retrieves one. Only one audit per
+store may be open. Opening and closing record the actor and time.
+`POST /api/inventory/audits/{id}/counts` records a count and immediately updates
+stock, even if the counted quantity is unchanged:
+
+```json
+{
+  "productId": "00000000-0000-0000-0000-000000000001",
+  "variantId": "00000000-0000-0000-0000-000000000002",
+  "expectedVersion": 0,
+  "quantity": 3,
+  "reason": "Physical count"
+}
+```
+
+Obtain `expectedVersion` from the balance before counting. If stock changed
+since then, the request returns `409` and must be reviewed against the current
+balance; even changes that restore the old quantity are detected. Counts and
+their full history can be listed with `GET /api/inventory/audits/{id}/counts`.
+`POST /api/inventory/audits/{id}/close` closes the audit; closed audits reject
+new counts but remain readable. Lists accept zero-based `page` and `size`,
+defaulting to 20 with a maximum of 100. Tenant scope is derived from the
+authenticated account, not supplied by the client.
+
+Reservation during checkout, automatic deduction when a sale is completed, and
+reservation expiration or cancellation are not yet implemented. The future
+management screen should show SKU, photo, description, total stock and
+variant-level stock; no screen or product-level total endpoint exists yet.
+Photo storage and management still require a decision. Product IDs provide a
+stable identity for future photo associations.
 
 #### Audit, access, and isolation
 
