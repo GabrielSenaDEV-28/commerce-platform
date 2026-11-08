@@ -3,6 +3,7 @@ package com.gabrielsena.commerce.auth.application;
 import com.gabrielsena.commerce.auth.RefreshTokenRepository;
 import com.gabrielsena.commerce.auth.domain.MerchantAccount;
 import com.gabrielsena.commerce.auth.domain.RefreshToken;
+import com.gabrielsena.commerce.security.OpaqueTokens;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
@@ -12,21 +13,14 @@ import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.Base64;
-import java.util.HexFormat;
 
 @Service
 public class TokenService {
 
     public static final long ACCESS_TOKEN_SECONDS = 15 * 60L;
     private static final long REFRESH_TOKEN_DAYS = 7;
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final JwtEncoder jwtEncoder;
     private final RefreshTokenRepository refreshTokenRepository;
@@ -45,7 +39,7 @@ public class TokenService {
     @Transactional
     public TokenPair issue(MerchantAccount account) {
         Instant now = Instant.now();
-        String refreshToken = generateRefreshToken();
+        String refreshToken = OpaqueTokens.generate();
         refreshTokenRepository.save(RefreshToken.create(
                 account.getId(),
                 hashToken(refreshToken),
@@ -71,18 +65,6 @@ public class TokenService {
     }
 
     public static String hashToken(String token) {
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(token.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(digest);
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is not available", exception);
-        }
-    }
-
-    private String generateRefreshToken() {
-        byte[] randomBytes = new byte[32];
-        SECURE_RANDOM.nextBytes(randomBytes);
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes);
+        return OpaqueTokens.hash(token);
     }
 }
