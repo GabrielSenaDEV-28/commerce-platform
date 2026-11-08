@@ -2,6 +2,7 @@ package com.gabrielsena.commerce.order.application;
 
 import com.gabrielsena.commerce.cart.application.ShoppingCartService;
 import com.gabrielsena.commerce.catalog.CatalogStoreResolver;
+import com.gabrielsena.commerce.customer.application.CustomerAuthService.Customer;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -36,7 +37,7 @@ public class OrderService {
                         List<OrderItem> items) { }
     public record OrderSummary(UUID id, String customerName, String customerEmail, String status,
                                Instant createdAt, Instant expiresAt, BigDecimal total) { }
-    private record OrderRow(UUID id, UUID reservationId, String name, String email, boolean acceptedPartial,
+    private record OrderRow(UUID id, UUID reservationId, UUID customerId, String name, String email, boolean acceptedPartial,
                             String status, Instant createdAt, Instant expiresAt) { }
 
     private static final String STATUS = """
@@ -46,18 +47,14 @@ public class OrderService {
             """;
 
     @Transactional
-    public Order create(UUID store, String token, UUID reservationId, String customerName, String customerEmail,
-                        boolean acceptPartial) {
+    public Order create(UUID store, String token, UUID reservationId, Customer customer, boolean acceptPartial) {
         UUID cart = carts.cartId(store, token, true);
-        String name = customerName.strip();
-        String email = customerEmail.strip();
         List<OrderRow> existing = rows("""
                 WHERE o.store_id = ? AND r.cart_id = ? AND o.reservation_id = ?
                 """, store, cart, reservationId);
         if (!existing.isEmpty()) {
             OrderRow order = existing.getFirst();
-            if (!order.name().equals(name) || !order.email().equals(email)
-                    || order.acceptedPartial() != acceptPartial) {
+            if (!customer.id().equals(order.customerId()) || order.acceptedPartial() != acceptPartial) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Order request differs from the original.");
             }
             return order(store, order);
@@ -77,12 +74,12 @@ public class OrderService {
         }
         UUID id = UUID.randomUUID();
         int inserted = jdbc.update("""
-                INSERT INTO commerce_orders (order_id, store_id, reservation_id, customer_name, customer_email,
+                INSERT INTO commerce_orders (order_id, store_id, reservation_id, customer_id, customer_name, customer_email,
                     accepted_partial, created_at)
-                SELECT ?, store_id, reservation_id, ?, ?, ?, clock_timestamp()
+                SELECT ?, store_id, reservation_id, ?, ?, ?, ?, clock_timestamp()
                 FROM checkout_reservations WHERE store_id = ? AND cart_id = ? AND reservation_id = ?
                   AND cancelled_at IS NULL AND expires_at > clock_timestamp()
-                """, id, name, email, acceptPartial, store, cart, reservationId);
+                """, id, customer.id(), customer.name(), customer.email(), acceptPartial, store, cart, reservationId);
         if (inserted == 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Checkout reservation is not active.");
         }
@@ -101,7 +98,27 @@ public class OrderService {
 
     @Transactional(readOnly = true)
     public Order customerOrder(UUID store, String token, UUID id) {
-        return order(store, find(store, id, carts.cartId(store, token, false)));
+        List<OrderRow> result = rows("""
+                WHERE o.store_id = ? AND o.order_id = ? AND r.cart_id = ? AND o.customer_id IS NULL
+                """, store, id, carts.cartId(store, token, false));
+        if (result.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found.");
+        }
+        return order(store, result.getFirst());
+    }
+
+    @Transactional(readOnly = true)
+    public Order ownedOrder(UUID store, UUID customer, UUID id) {
+        List<OrderRow> result = rows("WHERE o.store_id = ? AND o.order_id = ? AND o.customer_id = ?", store, id, customer);
+        if (result.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found.");
+        }
+        return order(store, result.getFirst());
+    }
+
+    @Transactional(readOnly = true)
+    public Page<OrderSummary> customerOrders(UUID store, UUID customer, Pageable page) {
+        return summaries(store, customer, page);
     }
 
     @Transactional(readOnly = true)
@@ -112,20 +129,29 @@ public class OrderService {
 
     @Transactional(readOnly = true)
     public Page<OrderSummary> merchantOrders(UUID actor, Pageable page) {
-        UUID store = stores.storeFor(actor);
+        return summaries(stores.storeFor(actor), null, page);
+    }
+
+    private Page<OrderSummary> summaries(UUID store, UUID customer, Pageable page) {
+        String customerFilter = customer == null ? "" : " AND o.customer_id = ?";
+        Object[] countArgs = customer == null ? new Object[]{store} : new Object[]{store, customer};
         long count = Objects.requireNonNull(jdbc.queryForObject(
-                "SELECT COUNT(*) FROM commerce_orders WHERE store_id = ?", Long.class, store));
+                "SELECT COUNT(*) FROM commerce_orders o WHERE o.store_id = ?" + customerFilter, Long.class, countArgs));
+        Object[] queryArgs = customer == null
+                ? new Object[]{store, page.getPageSize(), page.getOffset()}
+                : new Object[]{store, customer, page.getPageSize(), page.getOffset()};
         List<OrderSummary> result = jdbc.query("""
                 SELECT o.order_id, o.customer_name, o.customer_email, %s AS status, o.created_at, r.expires_at,
                     (SELECT SUM(i.unit_price * i.quantity) FROM commerce_order_items i
                      WHERE i.store_id = o.store_id AND i.order_id = o.order_id) AS total
                 FROM commerce_orders o JOIN checkout_reservations r
                   ON r.store_id = o.store_id AND r.reservation_id = o.reservation_id
-                WHERE o.store_id = ? ORDER BY o.created_at DESC, o.order_id DESC LIMIT ? OFFSET ?
-                """.formatted(STATUS), (rs, row) -> new OrderSummary(rs.getObject("order_id", UUID.class),
+                WHERE o.store_id = ?
+                """.formatted(STATUS) + customerFilter + " ORDER BY o.created_at DESC, o.order_id DESC LIMIT ? OFFSET ?",
+                (rs, row) -> new OrderSummary(rs.getObject("order_id", UUID.class),
                 rs.getString("customer_name"), rs.getString("customer_email"), rs.getString("status"),
                 rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("expires_at").toInstant(),
-                rs.getBigDecimal("total")), store, page.getPageSize(), page.getOffset());
+                rs.getBigDecimal("total")), queryArgs);
         return new PageImpl<>(result, page, count);
     }
 
@@ -141,12 +167,12 @@ public class OrderService {
 
     private List<OrderRow> rows(String where, Object... args) {
         return jdbc.query("""
-                SELECT o.order_id, o.reservation_id, o.customer_name, o.customer_email, o.accepted_partial,
+                SELECT o.order_id, o.reservation_id, o.customer_id, o.customer_name, o.customer_email, o.accepted_partial,
                        %s AS status, o.created_at, r.expires_at
                 FROM commerce_orders o JOIN checkout_reservations r
                   ON r.store_id = o.store_id AND r.reservation_id = o.reservation_id
                 """.formatted(STATUS) + where, (rs, row) -> new OrderRow(rs.getObject("order_id", UUID.class),
-                rs.getObject("reservation_id", UUID.class), rs.getString("customer_name"),
+                rs.getObject("reservation_id", UUID.class), rs.getObject("customer_id", UUID.class), rs.getString("customer_name"),
                 rs.getString("customer_email"), rs.getBoolean("accepted_partial"), rs.getString("status"),
                 rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("expires_at").toInstant()), args);
     }
