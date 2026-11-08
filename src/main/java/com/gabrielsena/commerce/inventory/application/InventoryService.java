@@ -25,11 +25,14 @@ public class InventoryService {
     private final JdbcTemplate jdbc;
     private final CatalogStoreResolver stores;
     private final ProductService catalog;
+    private final ReservationGuard reservations;
 
-    public InventoryService(JdbcTemplate jdbc, CatalogStoreResolver stores, ProductService catalog) {
+    public InventoryService(JdbcTemplate jdbc, CatalogStoreResolver stores, ProductService catalog,
+                            ReservationGuard reservations) {
         this.jdbc = jdbc;
         this.stores = stores;
         this.catalog = catalog;
+        this.reservations = reservations;
     }
 
     public record Balance(UUID productId, UUID variantId, int quantity, long version) { }
@@ -266,6 +269,9 @@ public class InventoryService {
 
     private Movement recordMovement(UUID id, ProductVariant variant, UUID auditId, UUID actor, String type,
                                     Balance before, int quantity, String reason) {
+        if (quantity < reservations.reserved(variant.getStoreId(), variant.getProductId(), variant.getId())) {
+            throw conflict("Stock cannot be reduced below active reservations.");
+        }
         Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
         jdbc.update("""
                 UPDATE inventory_balances SET quantity = ?, version = version + 1

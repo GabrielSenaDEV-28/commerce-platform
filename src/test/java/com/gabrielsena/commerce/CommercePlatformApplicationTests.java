@@ -27,6 +27,7 @@ import com.gabrielsena.commerce.catalog.domain.ItemTypeValues;
 import com.gabrielsena.commerce.catalog.domain.Product;
 import com.gabrielsena.commerce.catalog.domain.SizeFormat;
 import com.gabrielsena.commerce.cart.application.ShoppingCartService;
+import com.gabrielsena.commerce.checkout.application.CheckoutReservationService;
 import com.gabrielsena.commerce.inventory.application.InventoryService;
 import com.gabrielsena.commerce.inventory.application.InventoryService.MovementType;
 import com.gabrielsena.commerce.store.StoreRepository;
@@ -128,6 +129,9 @@ class CommercePlatformApplicationTests {
 
 	@Autowired
 	private ShoppingCartService shoppingCartService;
+
+	@Autowired
+	private CheckoutReservationService checkoutReservationService;
 
 	@Autowired
 	private JwtEncoder jwtEncoder;
@@ -829,6 +833,236 @@ class CommercePlatformApplicationTests {
 	private String storefrontHost(CatalogActor actor) {
 		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
 		return storeRepository.findByMerchantId(merchantId).orElseThrow().getSubdomain().getValue() + ".localhost";
+	}
+
+	@Test
+	void checkoutShouldReserveAvailableItemsAndProtectInventory() throws Exception {
+		CatalogActor actor = catalogActor();
+		CatalogActor other = catalogActor();
+		String host = storefrontHost(actor);
+		ItemType type = itemTypeService.create(actor.id(), new ItemTypeValues("Shirts", true, false, null));
+		Product product = productService.create(actor.id(), new ProductRequest(type.getId(), "SHIRT", "Shirt",
+				"Cotton", BigDecimal.TEN, List.of(new VariantRequest("Black", null, null),
+				new VariantRequest("White", null, null))));
+		UUID black = jdbcTemplate.queryForObject("SELECT variant_id FROM catalog_product_variants WHERE product_id = ? AND color = 'Black'",
+				UUID.class, product.getId());
+		UUID white = jdbcTemplate.queryForObject("SELECT variant_id FROM catalog_product_variants WHERE product_id = ? AND color = 'White'",
+				UUID.class, product.getId());
+		inventoryService.move(actor.id(), product.getId(), black, MovementType.ENTRY, 5, "Delivery", UUID.randomUUID());
+		inventoryService.move(actor.id(), product.getId(), white, MovementType.ENTRY, 2, "Delivery", UUID.randomUUID());
+		String cartJson = mockMvc.perform(post("/api/public/cart").with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+		String token = JsonPath.read(cartJson, "$.token");
+		for (UUID variant : List.of(black, white)) {
+			mockMvc.perform(put("/api/public/cart/items/{product}/{variant}", product.getId(), variant)
+							.header("Cart-Token", token).contentType(APPLICATION_JSON).content("{\"quantity\":2}")
+							.with(request -> { request.setServerName(host); return request; }))
+					.andExpect(status().isOk());
+		}
+		inventoryService.move(actor.id(), product.getId(), white, MovementType.EXIT, 1, "Adjustment", UUID.randomUUID());
+		String result = mockMvc.perform(post("/api/public/checkout").header("Cart-Token", token)
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.status").value("ACTIVE"))
+				.andExpect(jsonPath("$.expiresAt").isNotEmpty())
+				.andExpect(result1 -> assertEquals("no-store", result1.getResponse().getHeader("Cache-Control")))
+				.andReturn().getResponse().getContentAsString();
+		String reservationId = JsonPath.read(result, "$.id");
+		String expiry = JsonPath.read(result, "$.expiresAt");
+		assertEquals(List.of(true), JsonPath.read(result, "$.items[?(@.variantId == '" + black + "')].reserved"));
+		assertEquals(List.of(false), JsonPath.read(result, "$.items[?(@.variantId == '" + white + "')].reserved"));
+		assertEquals(List.of(1), JsonPath.read(result, "$.items[?(@.variantId == '" + white + "')].availableQuantity"));
+		mockMvc.perform(post("/api/public/checkout").header("Cart-Token", token)
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.id").value(reservationId))
+				.andExpect(jsonPath("$.expiresAt").value(expiry));
+		mockMvc.perform(get("/api/public/catalog/products/{id}/variants", product.getId())
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.content[?(@.id == '%s')].quantity", black).value(hasItem(3)));
+		mockMvc.perform(get("/api/public/cart").header("Cart-Token", token)
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.items[?(@.variantId == '%s')].stockQuantity", black).value(hasItem(3)));
+		mockMvc.perform(delete("/api/public/cart/items/{product}/{variant}", product.getId(), white)
+						.header("Cart-Token", token).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isConflict());
+		mockMvc.perform(put("/api/public/cart/items/{product}/{variant}", product.getId(), white)
+						.header("Cart-Token", token).contentType(APPLICATION_JSON).content("{\"quantity\":1}")
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isConflict());
+		mockMvc.perform(get("/api/public/checkout").header("Cart-Token", token)
+						.with(request -> { request.setServerName(storefrontHost(other)); return request; }))
+				.andExpect(status().isNotFound());
+		assertEquals(409, assertThrows(ResponseStatusException.class, () -> inventoryService.move(actor.id(),
+				product.getId(), black, MovementType.EXIT, 4, "Too much", UUID.randomUUID())).getStatusCode().value());
+		var audit = inventoryService.openAudit(actor.id());
+		var balance = inventoryService.balance(actor.id(), product.getId(), black);
+		assertEquals(409, assertThrows(ResponseStatusException.class, () -> inventoryService.count(actor.id(), audit.id(),
+				product.getId(), black, balance.version(), 1, "Count")).getStatusCode().value());
+		assertEquals(409, assertThrows(ResponseStatusException.class,
+				() -> productService.setActive(actor.id(), product.getId(), false)).getStatusCode().value());
+		assertEquals(409, assertThrows(ResponseStatusException.class,
+				() -> productService.setVariantActive(actor.id(), product.getId(), black, false)).getStatusCode().value());
+		productService.setVariantActive(actor.id(), product.getId(), white, false);
+		mockMvc.perform(post("/api/public/checkout/{id}/cancel", UUID.randomUUID()).header("Cart-Token", token)
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isConflict());
+		mockMvc.perform(post("/api/public/checkout/{id}/cancel", reservationId).header("Cart-Token", token)
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.status").value("CANCELLED"));
+		mockMvc.perform(delete("/api/public/cart/items/{product}/{variant}", product.getId(), white)
+						.header("Cart-Token", token).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk());
+		inventoryService.move(actor.id(), product.getId(), black, MovementType.EXIT, 5, "After cancel", UUID.randomUUID());
+		productService.setActive(actor.id(), product.getId(), false);
+	}
+
+	@Test
+	void checkoutShouldExpireWithoutJobAndKeepCartEditableWhenUnavailable() throws Exception {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
+		UUID store = storeRepository.findByMerchantId(merchantId).orElseThrow().getId();
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Delivery", UUID.randomUUID());
+		String token = shoppingCartService.create(store).token();
+		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
+		var first = checkoutReservationService.start(store, token);
+		assertEquals("ACTIVE", first.status());
+		assertEquals(1200, java.time.Duration.between(
+				jdbcTemplate.queryForObject("SELECT created_at FROM checkout_reservations WHERE reservation_id = ?",
+						java.sql.Timestamp.class, first.id()).toInstant(), first.expiresAt()).getSeconds());
+		jdbcTemplate.update("""
+				UPDATE checkout_reservations SET created_at = clock_timestamp() - INTERVAL '21 minutes',
+				expires_at = clock_timestamp() - INTERVAL '1 minute' WHERE reservation_id = ?
+				""", first.id());
+		assertEquals("EXPIRED", checkoutReservationService.get(store, token).status());
+		assertEquals(1, shoppingCartService.get(store, token).items().getFirst().stockQuantity());
+		shoppingCartService.remove(store, token, fixture.productId(), fixture.variantId());
+		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.EXIT, 1, "Adjustment", UUID.randomUUID());
+		var unavailable = checkoutReservationService.start(store, token);
+		assertEquals("UNAVAILABLE", unavailable.status());
+		assertNull(unavailable.id());
+		assertEquals(false, unavailable.items().getFirst().reserved());
+		shoppingCartService.remove(store, token, fixture.productId(), fixture.variantId());
+		assertEquals(409, assertThrows(ResponseStatusException.class,
+				() -> checkoutReservationService.start(store, token)).getStatusCode().value());
+	}
+
+	@Test
+	void checkoutShouldNotOversellDuringConcurrentLiveTraffic() throws Exception {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
+		UUID store = storeRepository.findByMerchantId(merchantId).orElseThrow().getId();
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 30, "Delivery", UUID.randomUUID());
+		List<String> tokens = new java.util.ArrayList<>();
+		for (int i = 0; i < 60; i++) {
+			String token = shoppingCartService.create(store).token();
+			shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
+			tokens.add(token);
+		}
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(60);
+		try {
+			List<Future<CheckoutReservationService.Checkout>> results = tokens.stream()
+					.map(token -> executor.submit(() -> { start.await(); return checkoutReservationService.start(store, token); }))
+					.toList();
+			start.countDown();
+			int active = 0;
+			int unavailable = 0;
+			for (var result : results) {
+				switch (result.get(60, TimeUnit.SECONDS).status()) {
+					case "ACTIVE" -> active++;
+					case "UNAVAILABLE" -> unavailable++;
+					default -> throw new AssertionError("Unexpected checkout status");
+				}
+			}
+			assertEquals(30, active);
+			assertEquals(30, unavailable);
+			assertEquals(30, inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId()).quantity());
+			assertEquals(0, shoppingCartService.get(store, tokens.getFirst()).items().getFirst().stockQuantity());
+		} finally {
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
+	void checkoutShouldSerializeRetriesAndStockAdjustments() throws Exception {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
+		UUID store = storeRepository.findByMerchantId(merchantId).orElseThrow().getId();
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Delivery", UUID.randomUUID());
+		String token = shoppingCartService.create(store).token();
+		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(3);
+		try {
+			Future<CheckoutReservationService.Checkout> first = executor.submit(() -> {
+				start.await(); return checkoutReservationService.start(store, token);
+			});
+			Future<CheckoutReservationService.Checkout> second = executor.submit(() -> {
+				start.await(); return checkoutReservationService.start(store, token);
+			});
+			Future<?> adjustment = executor.submit(() -> {
+				start.await();
+				return inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(),
+						MovementType.EXIT, 1, "Concurrent sale", UUID.randomUUID());
+			});
+			start.countDown();
+			var one = first.get(30, TimeUnit.SECONDS);
+			var two = second.get(30, TimeUnit.SECONDS);
+			assertEquals(one.status(), two.status());
+			if (one.id() == null) {
+				assertEquals("UNAVAILABLE", one.status());
+				assertNull(two.id());
+				adjustment.get(30, TimeUnit.SECONDS);
+				assertEquals(0, inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId()).quantity());
+			} else {
+				assertEquals("ACTIVE", one.status());
+				assertEquals(one.id(), two.id());
+				assertEquals(one.expiresAt(), two.expiresAt());
+				ExecutionException exception = assertThrows(ExecutionException.class, () -> adjustment.get(30, TimeUnit.SECONDS));
+				assertEquals(409, assertInstanceOf(ResponseStatusException.class, exception.getCause()).getStatusCode().value());
+				assertEquals(1, inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId()).quantity());
+			}
+		} finally {
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
+	void checkoutShouldSerializeWithProductDeactivation() throws Exception {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
+		UUID store = storeRepository.findByMerchantId(merchantId).orElseThrow().getId();
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Delivery", UUID.randomUUID());
+		String token = shoppingCartService.create(store).token();
+		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		try {
+			Future<CheckoutReservationService.Checkout> checkout = executor.submit(() -> {
+				start.await(); return checkoutReservationService.start(store, token);
+			});
+			Future<?> deactivate = executor.submit(() -> {
+				start.await(); return productService.setActive(actor.id(), fixture.productId(), false);
+			});
+			start.countDown();
+			var result = checkout.get(30, TimeUnit.SECONDS);
+			if (result.id() == null) {
+				assertEquals("UNAVAILABLE", result.status());
+				deactivate.get(30, TimeUnit.SECONDS);
+			} else {
+				assertEquals("ACTIVE", result.status());
+				ExecutionException exception = assertThrows(ExecutionException.class, () -> deactivate.get(30, TimeUnit.SECONDS));
+				assertEquals(409, assertInstanceOf(ResponseStatusException.class, exception.getCause()).getStatusCode().value());
+			}
+		} finally {
+			executor.shutdownNow();
+		}
 	}
 
 	@Test
