@@ -647,6 +647,91 @@ class CommercePlatformApplicationTests {
 	}
 
 	@Test
+	void inventoryProductSummariesShouldIncludePhysicalAndEnabledStock() throws Exception {
+		CatalogActor actor = catalogActor();
+		CatalogActor other = catalogActor();
+		ItemType type = itemTypeService.create(actor.id(), new ItemTypeValues("Shirts", true, true, SizeFormat.LETTER));
+		Product product = productService.create(actor.id(), new ProductRequest(type.getId(), "SHIRT", "Shirt",
+				"Cotton", BigDecimal.TEN, List.of(new VariantRequest("Black", "M", null),
+				new VariantRequest("White", "L", null), new VariantRequest("Blue", "S", null))));
+		UUID black = jdbcTemplate.queryForObject("SELECT variant_id FROM catalog_product_variants WHERE product_id = ? AND color = ?",
+				UUID.class, product.getId(), "Black");
+		UUID white = jdbcTemplate.queryForObject("SELECT variant_id FROM catalog_product_variants WHERE product_id = ? AND color = ?",
+				UUID.class, product.getId(), "White");
+		inventoryService.move(actor.id(), product.getId(), black, MovementType.ENTRY, 5, "Delivery", UUID.randomUUID());
+		inventoryService.move(actor.id(), product.getId(), white, MovementType.ENTRY, 3, "Delivery", UUID.randomUUID());
+		productService.setVariantActive(actor.id(), product.getId(), white, false);
+		String token = "Bearer " + actor.token();
+		String summary = "/api/inventory/products/" + product.getId();
+		mockMvc.perform(get(summary)).andExpect(status().isUnauthorized());
+		mockMvc.perform(get(summary).header("Authorization", token)).andExpect(status().isOk())
+				.andExpect(jsonPath("$.sku").value("SHIRT")).andExpect(jsonPath("$.name").value("Shirt"))
+				.andExpect(jsonPath("$.description").value("Cotton"))
+				.andExpect(jsonPath("$.physicalQuantity").value(8)).andExpect(jsonPath("$.enabledQuantity").value(5));
+		mockMvc.perform(get("/api/inventory/products").header("Authorization", token))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1))
+				.andExpect(jsonPath("$.content[0].physicalQuantity").value(8))
+				.andExpect(jsonPath("$.content[0].enabledQuantity").value(5));
+		String details = mockMvc.perform(get(summary + "/variants").header("Authorization", token))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(3))
+				.andReturn().getResponse().getContentAsString();
+		assertEquals(List.of(5), JsonPath.read(details, "$.content[?(@.color == 'Black')].quantity"));
+		assertEquals(List.of(0), JsonPath.read(details, "$.content[?(@.color == 'White')].enabledQuantity"));
+		assertEquals(List.of(0), JsonPath.read(details, "$.content[?(@.color == 'Blue')].quantity"));
+		mockMvc.perform(get(summary + "/variants").header("Authorization", token).param("size", "1"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(3))
+				.andExpect(jsonPath("$.totalPages").value(3));
+		mockMvc.perform(get(summary + "/variants").header("Authorization", token).param("size", "101"))
+				.andExpect(status().isBadRequest());
+		mockMvc.perform(get(summary).header("Authorization", "Bearer " + other.token())).andExpect(status().isNotFound());
+		mockMvc.perform(get(summary + "/variants").header("Authorization", "Bearer " + other.token()))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get("/api/inventory/products").header("Authorization", "Bearer " + other.token()))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(0));
+		mockMvc.perform(get("/api/inventory/products/{id}", UUID.randomUUID()).header("Authorization", token))
+				.andExpect(status().isNotFound());
+		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
+		mockMvc.perform(get(summary).header("Authorization", "Bearer " + tokenWithClaims(other.id(), merchantId)))
+				.andExpect(status().isNotFound());
+		productService.setActive(actor.id(), product.getId(), false);
+		mockMvc.perform(get(summary).header("Authorization", token))
+				.andExpect(jsonPath("$.physicalQuantity").value(8)).andExpect(jsonPath("$.enabledQuantity").value(0));
+		mockMvc.perform(get(summary + "/variants").header("Authorization", token))
+				.andExpect(jsonPath("$.content[*].enabledQuantity", org.hamcrest.Matchers.everyItem(org.hamcrest.Matchers.is(0))));
+		mockMvc.perform(get("/api/inventory/products").header("Authorization", token).param("active", "false"))
+				.andExpect(jsonPath("$.content[0].physicalQuantity").value(8))
+				.andExpect(jsonPath("$.content[0].enabledQuantity").value(0));
+		productService.setActive(actor.id(), product.getId(), true);
+		mockMvc.perform(get(summary).header("Authorization", token)).andExpect(jsonPath("$.enabledQuantity").value(5));
+	}
+
+	@Test
+	void inventoryProductSummaryShouldPaginateAndSumBeyondIntegerRange() throws Exception {
+		CatalogActor actor = catalogActor();
+		ItemType type = itemTypeService.create(actor.id(), new ItemTypeValues("Items", true, false, null));
+		Product product = productService.create(actor.id(), new ProductRequest(type.getId(), "SKU1", "Alpha",
+				"Description", BigDecimal.TEN, List.of(new VariantRequest("Black", null, null),
+				new VariantRequest("White", null, null))));
+		List<UUID> variants = jdbcTemplate.queryForList(
+				"SELECT variant_id FROM catalog_product_variants WHERE product_id = ?", UUID.class, product.getId());
+		for (UUID variant : variants) {
+			inventoryService.move(actor.id(), product.getId(), variant, MovementType.ENTRY,
+					Integer.MAX_VALUE, "Delivery", UUID.randomUUID());
+		}
+		productService.create(actor.id(), new ProductRequest(type.getId(), "SKU2", "Beta",
+				"Description", BigDecimal.TEN, List.of(new VariantRequest("Blue", null, null))));
+		String token = "Bearer " + actor.token();
+		mockMvc.perform(get("/api/inventory/products").header("Authorization", token).param("size", "1"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(2))
+				.andExpect(jsonPath("$.totalPages").value(2)).andExpect(jsonPath("$.content[0].name").value("Alpha"))
+				.andExpect(jsonPath("$.content[0].physicalQuantity").value(4294967294L))
+				.andExpect(jsonPath("$.content[0].enabledQuantity").value(4294967294L));
+		mockMvc.perform(get("/api/inventory/products").header("Authorization", token).param("size", "1").param("page", "1"))
+				.andExpect(jsonPath("$.content[0].name").value("Beta"))
+				.andExpect(jsonPath("$.content[0].physicalQuantity").value(0));
+	}
+
+	@Test
 	void inventoryShouldTrackMovementsAndFullAuditHistory() throws Exception {
 		CatalogActor actor = catalogActor();
 		InventoryFixture fixture = inventoryFixture(actor);

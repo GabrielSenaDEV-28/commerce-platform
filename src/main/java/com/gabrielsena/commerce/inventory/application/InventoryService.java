@@ -33,10 +33,84 @@ public class InventoryService {
     }
 
     public record Balance(UUID productId, UUID variantId, int quantity, long version) { }
+    public record ProductStock(UUID productId, String sku, String name, String description, boolean active,
+                               long physicalQuantity, long enabledQuantity) { }
+    public record VariantStock(UUID variantId, String color, String size, boolean active,
+                               int quantity, long version, int enabledQuantity) { }
     public record Audit(UUID id, Instant openedAt, UUID openedBy, Instant closedAt, UUID closedBy) { }
     public record Movement(UUID id, UUID productId, UUID variantId, UUID auditId, UUID actorId,
                            Instant occurredAt, String type, int beforeQuantity, int afterQuantity, String reason) { }
     public enum MovementType { ENTRY, EXIT }
+
+    private static final String PRODUCT_STOCK_SELECT = """
+            SELECT p.product_id, p.sku, p.name, p.description, p.active,
+                   COALESCE(SUM(b.quantity), 0) AS physical_quantity,
+                   COALESCE(SUM(b.quantity) FILTER (WHERE p.active AND v.active), 0) AS enabled_quantity
+            FROM (%s) p
+            LEFT JOIN catalog_product_variants v ON v.store_id = p.store_id AND v.product_id = p.product_id
+            LEFT JOIN inventory_balances b ON b.store_id = v.store_id AND b.product_id = v.product_id
+                                          AND b.variant_id = v.variant_id
+            GROUP BY p.product_id, p.sku, p.name, p.description, p.active
+            ORDER BY p.name, p.product_id
+            """;
+
+    @Transactional(readOnly = true)
+    public Page<ProductStock> productStocks(UUID actor, boolean active, Pageable page) {
+        UUID store = stores.storeFor(actor);
+        Long count = jdbc.queryForObject("SELECT COUNT(*) FROM catalog_products WHERE store_id = ? AND active = ?",
+                Long.class, store, active);
+        String selection = """
+                SELECT store_id, product_id, sku, name, description, active FROM catalog_products
+                WHERE store_id = ? AND active = ? ORDER BY name, product_id LIMIT ? OFFSET ?
+                """;
+        List<ProductStock> results = jdbc.query(PRODUCT_STOCK_SELECT.formatted(selection),
+                (rs, row) -> productStockRow(rs), store, active, page.getPageSize(), page.getOffset());
+        return new PageImpl<>(results, page, Objects.requireNonNull(count));
+    }
+
+    @Transactional(readOnly = true)
+    public ProductStock productStock(UUID actor, UUID productId) {
+        UUID store = stores.storeFor(actor);
+        String selection = """
+                SELECT store_id, product_id, sku, name, description, active FROM catalog_products
+                WHERE store_id = ? AND product_id = ?
+                """;
+        List<ProductStock> results = jdbc.query(PRODUCT_STOCK_SELECT.formatted(selection),
+                (rs, row) -> productStockRow(rs), store, productId);
+        if (results.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found.");
+        }
+        return results.getFirst();
+    }
+
+    @Transactional(readOnly = true)
+    public Page<VariantStock> variantStocks(UUID actor, UUID productId, Pageable page) {
+        var product = catalog.get(actor, productId);
+        UUID store = product.getStoreId();
+        Long count = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM catalog_product_variants WHERE store_id = ? AND product_id = ?
+                """, Long.class, store, productId);
+        List<VariantStock> results = jdbc.query("""
+                SELECT v.variant_id, v.color, v.size, v.active, COALESCE(b.quantity, 0) AS quantity,
+                       COALESCE(b.version, 0) AS version,
+                       CASE WHEN p.active AND v.active THEN COALESCE(b.quantity, 0) ELSE 0 END AS enabled_quantity
+                FROM catalog_product_variants v
+                JOIN catalog_products p ON p.store_id = v.store_id AND p.product_id = v.product_id
+                LEFT JOIN inventory_balances b ON b.store_id = v.store_id AND b.product_id = v.product_id
+                                              AND b.variant_id = v.variant_id
+                WHERE v.store_id = ? AND v.product_id = ?
+                ORDER BY v.variant_id LIMIT ? OFFSET ?
+                """, (rs, row) -> new VariantStock(rs.getObject("variant_id", UUID.class), rs.getString("color"),
+                rs.getString("size"), rs.getBoolean("active"), rs.getInt("quantity"), rs.getLong("version"),
+                rs.getInt("enabled_quantity")), store, productId, page.getPageSize(), page.getOffset());
+        return new PageImpl<>(results, page, Objects.requireNonNull(count));
+    }
+
+    private ProductStock productStockRow(ResultSet rs) throws SQLException {
+        return new ProductStock(rs.getObject("product_id", UUID.class), rs.getString("sku"), rs.getString("name"),
+                rs.getString("description"), rs.getBoolean("active"), rs.getLong("physical_quantity"),
+                rs.getLong("enabled_quantity"));
+    }
 
     @Transactional(readOnly = true)
     public Balance balance(UUID actor, UUID productId, UUID variantId) {

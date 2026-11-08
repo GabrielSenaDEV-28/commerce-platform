@@ -272,11 +272,30 @@ defaulting to 20 with a maximum of 100. Tenant scope is derived from the
 authenticated account, not supplied by the client.
 
 Reservation during checkout, automatic deduction when a sale is completed, and
-reservation expiration or cancellation are not yet implemented. The future
-management screen should show SKU, photo, description, total stock and
-variant-level stock; no screen or product-level total endpoint exists yet.
-Photo storage and management still require a decision. Product IDs provide a
-stable identity for future photo associations.
+reservation expiration or cancellation are not yet implemented.
+
+The authenticated `GET /api/inventory/products` lists product stock summaries,
+filtered by product status (`active=true` by default, or `active=false`) and
+paginated. `GET /api/inventory/products/{productId}` returns one summary,
+including an inactive product. Each summary has SKU, name, description, product
+status, `physicalQuantity` and `enabledQuantity`. Physical quantity includes
+all variants, active or inactive. Enabled quantity includes only active
+variants of an active product; it is zero when the product is inactive.
+These are physical balances, not guaranteed sale availability: reservations and
+checkout are not implemented.
+
+`GET /api/inventory/products/{productId}/variants` lists all variants of that
+product with color, size, status, physical quantity, balance version and
+enabled quantity. Variants with no recorded movement have quantity and version
+zero. The list is paginated, with the same limits as other inventory lists.
+All three endpoints enforce the authenticated store boundary. Totals and
+variant pages are separate requests and can reflect different moments if stock
+changes between requests.
+
+The future management screen should show SKU, photo, description, total stock
+and variant-level stock; no screen exists yet. Photo storage and management
+still require a decision. Product IDs provide a stable identity for future
+photo associations.
 
 #### Audit, access, and isolation
 
