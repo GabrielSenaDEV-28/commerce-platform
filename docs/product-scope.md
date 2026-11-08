@@ -424,10 +424,13 @@ for an active reservation. Use the store hostname, the customer's bearer
 access token, and the `Cart-Token` header, with a JSON body such as:
 
 ```json
-{"acceptPartial":false}
+{"acceptPartial":false,"addressId":"00000000-0000-0000-0000-000000000001"}
 ```
 
-The order records the authenticated customer's name and email at creation.
+The order records the authenticated customer's name, email and phone at
+creation, together with a snapshot of the selected saved delivery address.
+An address owned by that customer and a profile phone are required for new
+orders. Existing orders without delivery details remain readable.
 If any checkout item was unavailable,
 `acceptPartial` must explicitly be `true`; only fully reserved items enter the
 order. Otherwise `false` is sufficient. The response is `200` with the order,
@@ -437,7 +440,8 @@ it excludes shipping, which has not been implemented. Prices are captured
 from checkout; names and variant attributes are captured at order creation.
 
 There is at most one order per reservation. A repeat by the same customer with
-the same `acceptPartial` returns the original order, including after its
+the same `acceptPartial` and `addressId` returns the original order, even if
+the address has since been edited or deleted, including after its
 expiration or cancellation. A different customer or confirmation value, or
 an inactive reservation without an order, returns `409`. No request extends the reservation. The order
 is `PENDING` only while the reservation is active, becomes `EXPIRED` when the
@@ -460,10 +464,10 @@ cancellation even after an order is created, so it remains a sensitive secret.
 Orders and personal data are retained without automatic deletion;
 retention, privacy policy and secure customer recovery require future design.
 
-This block does not implement managed contact information or addresses,
-shipping, order confirmation, payment processing or physical stock deduction.
-Customer profiles and those details need future branches. A payment provider (such as PagBank or Mercado Pago)
-has not been selected. Payment data handling, provider integration, payment
+This block does not implement shipping calculation, order confirmation, payment
+processing or physical stock deduction.
+A payment provider (such as PagBank or Mercado Pago) has not been selected.
+Payment data handling, provider integration, payment
 expiration, asynchronous confirmation, secure webhooks, idempotency, and
 atomic reservation-to-sale conversion require a separate design. Do not store
 card numbers or security codes in this application. Without those capabilities,
@@ -497,6 +501,44 @@ legacy orders, rate limiting, abuse prevention and privacy/retention policies
 remain to be designed before production. Registration currently permits
 unverified email addresses. Do not treat possession of an account as proof
 that its email address is controlled by the account owner.
+
+#### Customer profile and delivery addresses
+
+The authenticated customer can read `GET /api/public/customer/profile` and
+update `PUT /api/public/customer/profile` with `{"name":"Ana",
+"phone":"11987654321"}`. Phone must contain 10 or 11 digits (Brazilian area
+code and number); no external verification is performed. Email changes and
+CPF are not implemented. Existing accounts may have a null phone, but need
+to provide one before creating a new order.
+
+`/api/public/customer/addresses` supports `GET` and `POST`; the
+`/{addressId}` path supports `GET`, `PUT`, and `DELETE`. Each customer can
+have at most 10 addresses per store. The response includes `country: "BR"`;
+only Brazil is supported. For example:
+
+```json
+{
+  "recipient": "Ana",
+  "postalCode": "01001000",
+  "street": "Rua A",
+  "number": "10",
+  "complement": "Apto 2",
+  "district": "Centro",
+  "city": "São Paulo",
+  "state": "SP"
+}
+```
+
+Recipient, street, number, district and city are required; complement is
+optional. CEP must be eight digits and state must be a valid uppercase
+Brazilian UF. Validation checks format only, not the existence or
+deliverability of an address. These endpoints require the store hostname and
+the customer's bearer token, are isolated by store and account, and return
+`Cache-Control: no-store`. Editing or deleting a saved address does not change
+the copy on an existing order. Delivery snapshots and phone are available to
+the order owner and merchant, and are subject to the same pending privacy and
+retention decisions as order data. Freight, address verification, customer
+UI and payment integration remain future work.
 
 #### Audit, access, and isolation
 

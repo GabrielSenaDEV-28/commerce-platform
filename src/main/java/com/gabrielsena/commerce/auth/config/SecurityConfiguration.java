@@ -91,6 +91,12 @@ public class SecurityConfiguration {
                         .requestMatchers(HttpMethod.GET, "/api/public/orders/{orderId}").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/public/customer/orders",
                                 "/api/public/customer/orders/{orderId}").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/public/customer/profile", "/api/public/customer/addresses",
+                                "/api/public/customer/addresses/{id}").authenticated()
+                        .requestMatchers(HttpMethod.PUT, "/api/public/customer/profile",
+                                "/api/public/customer/addresses/{id}").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/public/customer/addresses").authenticated()
+                        .requestMatchers(HttpMethod.DELETE, "/api/public/customer/addresses/{id}").authenticated()
                         .anyRequest().access((authentication, context) -> {
                             var auth = authentication.get();
                             return new AuthorizationDecision(auth instanceof JwtAuthenticationToken jwt

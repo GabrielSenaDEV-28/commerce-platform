@@ -3,6 +3,8 @@ package com.gabrielsena.commerce.order.application;
 import com.gabrielsena.commerce.cart.application.ShoppingCartService;
 import com.gabrielsena.commerce.catalog.CatalogStoreResolver;
 import com.gabrielsena.commerce.customer.application.CustomerAuthService.Customer;
+import com.gabrielsena.commerce.customer.application.CustomerProfileService;
+import com.gabrielsena.commerce.customer.application.CustomerProfileService.Address;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -23,22 +25,26 @@ public class OrderService {
     private final JdbcTemplate jdbc;
     private final ShoppingCartService carts;
     private final CatalogStoreResolver stores;
+    private final CustomerProfileService profiles;
 
-    public OrderService(JdbcTemplate jdbc, ShoppingCartService carts, CatalogStoreResolver stores) {
+    public OrderService(JdbcTemplate jdbc, ShoppingCartService carts, CatalogStoreResolver stores,
+                        CustomerProfileService profiles) {
         this.jdbc = jdbc;
         this.carts = carts;
         this.stores = stores;
+        this.profiles = profiles;
     }
 
     public record OrderItem(UUID productId, UUID variantId, String name, String color, String size,
                             BigDecimal unitPrice, int quantity) { }
     public record Order(UUID id, UUID reservationId, String customerName, String customerEmail,
                         String status, Instant createdAt, Instant expiresAt, BigDecimal total,
-                        List<OrderItem> items) { }
+                        List<OrderItem> items, Delivery delivery) { }
+    public record Delivery(String phone, Address address) { }
     public record OrderSummary(UUID id, String customerName, String customerEmail, String status,
                                Instant createdAt, Instant expiresAt, BigDecimal total) { }
     private record OrderRow(UUID id, UUID reservationId, UUID customerId, String name, String email, boolean acceptedPartial,
-                            String status, Instant createdAt, Instant expiresAt) { }
+                            UUID addressId, String status, Instant createdAt, Instant expiresAt) { }
 
     private static final String STATUS = """
             CASE WHEN r.cancelled_at IS NOT NULL THEN 'CANCELLED'
@@ -47,14 +53,15 @@ public class OrderService {
             """;
 
     @Transactional
-    public Order create(UUID store, String token, UUID reservationId, Customer customer, boolean acceptPartial) {
+    public Order create(UUID store, String token, UUID reservationId, Customer customer, boolean acceptPartial, UUID addressId) {
         UUID cart = carts.cartId(store, token, true);
         List<OrderRow> existing = rows("""
                 WHERE o.store_id = ? AND r.cart_id = ? AND o.reservation_id = ?
                 """, store, cart, reservationId);
         if (!existing.isEmpty()) {
             OrderRow order = existing.getFirst();
-            if (!customer.id().equals(order.customerId()) || order.acceptedPartial() != acceptPartial) {
+            if (!customer.id().equals(order.customerId()) || order.acceptedPartial() != acceptPartial
+                    || !Objects.equals(order.addressId(), addressId)) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Order request differs from the original.");
             }
             return order(store, order);
@@ -72,6 +79,11 @@ public class OrderService {
         if (items.contains(false) && !acceptPartial) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Partial checkout requires explicit confirmation.");
         }
+        var profile = profiles.lockCustomer(store, customer.id());
+        if (profile.phone() == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "A customer phone is required.");
+        }
+        Address address = profiles.get(store, customer.id(), addressId);
         UUID id = UUID.randomUUID();
         int inserted = jdbc.update("""
                 INSERT INTO commerce_orders (order_id, store_id, reservation_id, customer_id, customer_name, customer_email,
@@ -79,10 +91,16 @@ public class OrderService {
                 SELECT ?, store_id, reservation_id, ?, ?, ?, ?, clock_timestamp()
                 FROM checkout_reservations WHERE store_id = ? AND cart_id = ? AND reservation_id = ?
                   AND cancelled_at IS NULL AND expires_at > clock_timestamp()
-                """, id, customer.id(), customer.name(), customer.email(), acceptPartial, store, cart, reservationId);
+                """, id, customer.id(), profile.name(), profile.email(), acceptPartial, store, cart, reservationId);
         if (inserted == 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Checkout reservation is not active.");
         }
+        jdbc.update("""
+                INSERT INTO order_delivery_details (store_id, order_id, address_id, phone, recipient, postal_code,
+                    street, house_number, complement, district, city, state)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, store, id, address.id(), profile.phone(), address.recipient(), address.postalCode(),
+                address.street(), address.number(), address.complement(), address.district(), address.city(), address.state());
         jdbc.update("""
                 INSERT INTO commerce_order_items (store_id, order_id, product_id, variant_id, product_name,
                     color, size, unit_price, quantity)
@@ -167,13 +185,14 @@ public class OrderService {
 
     private List<OrderRow> rows(String where, Object... args) {
         return jdbc.query("""
-                SELECT o.order_id, o.reservation_id, o.customer_id, o.customer_name, o.customer_email, o.accepted_partial,
+                SELECT o.order_id, o.reservation_id, o.customer_id, o.customer_name, o.customer_email, o.accepted_partial, d.address_id,
                        %s AS status, o.created_at, r.expires_at
                 FROM commerce_orders o JOIN checkout_reservations r
                   ON r.store_id = o.store_id AND r.reservation_id = o.reservation_id
+                LEFT JOIN order_delivery_details d ON d.store_id = o.store_id AND d.order_id = o.order_id
                 """.formatted(STATUS) + where, (rs, row) -> new OrderRow(rs.getObject("order_id", UUID.class),
                 rs.getObject("reservation_id", UUID.class), rs.getObject("customer_id", UUID.class), rs.getString("customer_name"),
-                rs.getString("customer_email"), rs.getBoolean("accepted_partial"), rs.getString("status"),
+                rs.getString("customer_email"), rs.getBoolean("accepted_partial"), rs.getObject("address_id", UUID.class), rs.getString("status"),
                 rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("expires_at").toInstant()), args);
     }
 
@@ -186,7 +205,14 @@ public class OrderService {
                 rs.getString("size"), rs.getBigDecimal("unit_price"), rs.getInt("quantity")), store, row.id());
         BigDecimal total = items.stream().map(item -> item.unitPrice().multiply(BigDecimal.valueOf(item.quantity())))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+        List<Delivery> details = jdbc.query("""
+                SELECT * FROM order_delivery_details WHERE store_id = ? AND order_id = ?
+                """, (rs, number) -> new Delivery(rs.getString("phone"),
+                new Address(rs.getObject("address_id", UUID.class), rs.getString("recipient"),
+                        rs.getString("postal_code"), rs.getString("street"), rs.getString("house_number"),
+                        rs.getString("complement"), rs.getString("district"), rs.getString("city"),
+                        rs.getString("state"), "BR")), store, row.id());
         return new Order(row.id(), row.reservationId(), row.name(), row.email(), row.status(),
-                row.createdAt(), row.expiresAt(), total, items);
+                row.createdAt(), row.expiresAt(), total, items, details.isEmpty() ? null : details.getFirst());
     }
 }
