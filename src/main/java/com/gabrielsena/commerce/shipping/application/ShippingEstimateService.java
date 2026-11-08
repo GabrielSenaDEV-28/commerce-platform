@@ -1,11 +1,17 @@
 package com.gabrielsena.commerce.shipping.application;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.gabrielsena.commerce.cart.application.ShoppingCartService;
 import com.gabrielsena.commerce.shipping.melhorenvio.MelhorEnvioClient;
+import com.gabrielsena.commerce.shipping.melhorenvio.MelhorEnvioException;
 import com.gabrielsena.commerce.shipping.melhorenvio.MelhorEnvioOAuthService;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
@@ -13,7 +19,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -22,13 +30,16 @@ public class ShippingEstimateService {
     private final ShoppingCartService carts;
     private final MelhorEnvioOAuthService authorization;
     private final MelhorEnvioClient provider;
+    private final TransactionTemplate transactions;
 
     public ShippingEstimateService(JdbcTemplate jdbc, ShoppingCartService carts,
-                                   MelhorEnvioOAuthService authorization, MelhorEnvioClient provider) {
+                                   MelhorEnvioOAuthService authorization, MelhorEnvioClient provider,
+                                   PlatformTransactionManager transactionManager) {
         this.jdbc = jdbc;
         this.carts = carts;
         this.authorization = authorization;
         this.provider = provider;
+        this.transactions = new TransactionTemplate(transactionManager);
     }
 
     public record ItemIssue(UUID productId, UUID variantId, List<String> reasons) { }
@@ -43,9 +54,11 @@ public class ShippingEstimateService {
     private record Item(UUID productId, UUID variantId, int quantity, BigDecimal price,
                         BigDecimal weight, BigDecimal width, BigDecimal height, BigDecimal length,
                         boolean available) { }
-    public record CheckoutQuote(UUID reservationId, Instant expiresAt,
+    public record CheckoutQuote(UUID quoteId, UUID reservationId, Instant expiresAt,
                                 List<MelhorEnvioClient.ServiceQuote> quotes,
-                                List<MelhorEnvioClient.UnavailableService> unavailable) { }
+                                List<MelhorEnvioClient.UnavailableService> unavailable,
+                                @JsonIgnore MelhorEnvioClient.QuoteRequest request) { }
+    public record SelectedQuote(String postalCode, MelhorEnvioClient.ServiceQuote service) { }
 
     private static final String ITEM_COLUMNS = """
             p.product_id, v.variant_id, COALESCE(v.price, p.price) AS price,
@@ -87,9 +100,73 @@ public class ShippingEstimateService {
         return estimate(store, destination, items);
     }
 
+    @Transactional(propagation = Propagation.NEVER)
     public CheckoutQuote checkout(UUID store, String token, UUID reservationId, String destination) {
         UUID cartId = carts.cartId(store, token, false);
         activeReservation(store, cartId, reservationId);
+        MelhorEnvioClient.QuoteRequest request = checkoutRequest(store, cartId, reservationId, destination);
+        MelhorEnvioClient.QuoteResult result = quote(store, request);
+        validateQuotes(result);
+        return Objects.requireNonNull(transactions.execute(status -> {
+            carts.cartId(store, token, true);
+            lockQuoteInputs(store, reservationId);
+            Instant expiresAt = activeReservation(store, cartId, reservationId);
+            if (!request.equals(checkoutRequest(store, cartId, reservationId, destination))) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Shipping inputs changed; quote again.");
+            }
+            UUID quoteId = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO checkout_shipping_quotes (quote_id, store_id, reservation_id, destination_postal_code)
+                    VALUES (?, ?, ?, ?)
+                    """, quoteId, store, reservationId, destination);
+            for (var service : result.quotes()) {
+                jdbc.update("""
+                        INSERT INTO checkout_shipping_quote_services (quote_id, service_id, name, price, delivery_days)
+                        VALUES (?, ?, ?, ?, ?)
+                        """, quoteId, service.id(), service.name(), service.price(), service.deliveryDays());
+            }
+            return new CheckoutQuote(quoteId, reservationId, expiresAt, result.quotes(), result.unavailable(), request);
+        }));
+    }
+
+    public SelectedQuote selection(UUID store, UUID reservationId, UUID quoteId, int serviceId) {
+        return jdbc.query("""
+                SELECT q.destination_postal_code, s.service_id, s.name, s.price, s.delivery_days
+                FROM checkout_shipping_quotes q
+                JOIN checkout_shipping_quote_services s ON s.quote_id = q.quote_id
+                WHERE q.store_id = ? AND q.reservation_id = ? AND q.quote_id = ? AND s.service_id = ?
+                """, (rs, row) -> new SelectedQuote(rs.getString(1),
+                new MelhorEnvioClient.ServiceQuote(rs.getInt(2), rs.getString(3),
+                        rs.getBigDecimal(4), rs.getInt(5))), store, reservationId, quoteId, serviceId).stream()
+                .findFirst().orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Shipping selection not found."));
+    }
+
+    public void requireActive(UUID store, String token, UUID reservationId) {
+        activeReservation(store, carts.cartId(store, token, false), reservationId);
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void verifyQuoteInputs(UUID store, UUID cartId, CheckoutQuote quote) {
+        lockQuoteInputs(store, quote.reservationId());
+        activeReservation(store, cartId, quote.reservationId());
+        if (!quote.request().equals(checkoutRequest(store, cartId, quote.reservationId(),
+                quote.request().destinationPostalCode()))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Shipping inputs changed; quote again.");
+        }
+    }
+
+    private void lockQuoteInputs(UUID store, UUID reservationId) {
+        jdbc.query("""
+                SELECT p.product_id FROM catalog_products p JOIN
+                  (SELECT DISTINCT product_id FROM checkout_reservation_items
+                   WHERE store_id = ? AND reservation_id = ? AND reserved) i ON i.product_id = p.product_id
+                WHERE p.store_id = ? ORDER BY p.product_id FOR SHARE OF p
+                """, (rs, row) -> rs.getObject(1, UUID.class), store, reservationId, store);
+        jdbc.query("SELECT store_id FROM store_shipping_settings WHERE store_id = ? FOR SHARE",
+                (rs, row) -> rs.getObject(1, UUID.class), store);
+    }
+
+    private MelhorEnvioClient.QuoteRequest checkoutRequest(UUID store, UUID cartId, UUID reservationId, String destination) {
         List<Item> items = jdbc.query("""
                 SELECT i.product_id, i.variant_id, i.quantity, i.price,
                        v.shipping_weight_kg, v.shipping_width_cm, v.shipping_height_cm, v.shipping_length_cm
@@ -104,9 +181,7 @@ public class ShippingEstimateService {
         if (items.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Checkout reservation is not active.");
         }
-        MelhorEnvioClient.QuoteResult result = estimate(store, destination, items);
-        Instant expiresAt = activeReservation(store, cartId, reservationId);
-        return new CheckoutQuote(reservationId, expiresAt, result.quotes(), result.unavailable());
+        return request(store, destination, items);
     }
 
     private Instant activeReservation(UUID store, UUID cartId, UUID reservationId) {
@@ -120,6 +195,14 @@ public class ShippingEstimateService {
     }
 
     private MelhorEnvioClient.QuoteResult estimate(UUID store, String destination, List<Item> items) {
+        return quote(store, request(store, destination, items));
+    }
+
+    private MelhorEnvioClient.QuoteResult quote(UUID store, MelhorEnvioClient.QuoteRequest request) {
+        return provider.quote(authorization.accessToken(store), request);
+    }
+
+    private MelhorEnvioClient.QuoteRequest request(UUID store, String destination, List<Item> items) {
         List<ItemIssue> issues = new ArrayList<>();
         List<MelhorEnvioClient.Product> products = new ArrayList<>();
         for (Item item : items) {
@@ -143,8 +226,21 @@ public class ShippingEstimateService {
         String origin = jdbc.query("SELECT postal_code FROM store_shipping_settings WHERE store_id = ?",
                 (rs, row) -> rs.getString(1), store).stream().findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Shipping origin is not configured."));
-        String token = authorization.accessToken(store);
-        return provider.quote(token, new MelhorEnvioClient.QuoteRequest(origin, destination, List.copyOf(products)));
+        return new MelhorEnvioClient.QuoteRequest(origin, destination, List.copyOf(products));
+    }
+
+    private static void validateQuotes(MelhorEnvioClient.QuoteResult result) {
+        var ids = new HashSet<Integer>();
+        for (var service : result.quotes()) {
+            if (!ids.add(service.id()) || service.price().compareTo(new BigDecimal("9999999999.99")) > 0) {
+                throw new MelhorEnvioException(MelhorEnvioException.Reason.INVALID_RESPONSE);
+            }
+        }
+        for (var service : result.unavailable()) {
+            if (!ids.add(service.id())) {
+                throw new MelhorEnvioException(MelhorEnvioException.Reason.INVALID_RESPONSE);
+            }
+        }
     }
 
     private static Item item(ResultSet rs, int quantity) throws SQLException {
