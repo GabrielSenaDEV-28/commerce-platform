@@ -297,6 +297,48 @@ and variant-level stock; no screen exists yet. Photo storage and management
 still require a decision. Product IDs provide a stable identity for future
 photo associations.
 
+#### Public catalog API
+
+The public, read-only catalog identifies a store from the request hostname:
+`<store-subdomain>.<base-domain>`. Configure `STOREFRONT_BASE_DOMAIN` to the
+platform's base domain; it defaults to `localhost` for development. For
+example, when the server is listening on port 8080, replace `my-store` with a
+registered store subdomain and run:
+
+```shell
+curl --resolve my-store.localhost:8080:127.0.0.1 \
+  http://my-store.localhost:8080/api/public/catalog/products
+```
+
+Only a single valid store subdomain under the configured base domain is
+accepted. The store is resolved in the database; clients do not provide a store
+ID. The application ignores forwarded host headers by default
+(`server.forward-headers-strategy=none`). A reverse proxy must preserve the
+validated public Host, and deployments must not trust forwarded host headers
+from untrusted clients. Configure the production base domain explicitly.
+
+The following GET endpoints do not require authentication:
+
+- `/api/public/catalog/products`: paginated product list.
+- `/api/public/catalog/products/{productId}`: product name, description and
+  default price.
+- `/api/public/catalog/products/{productId}/variants`: paginated active
+  variants, including color, size, effective price, exact physical quantity,
+  and whether the quantity is greater than zero.
+
+Only active products with at least one active variant are visible. Inactive
+variants are omitted; active variants with zero stock remain visible and are
+marked unavailable. A missing, inactive or different store's product returns
+`404`. Prices are in BRL. Pagination uses zero-based `page`, with `size`
+defaulting to 20 and limited to 100. Separate requests can reflect different
+moments. Stock and prices are informational; checkout must revalidate them,
+and availability is not guaranteed because reservations are not yet
+implemented. Administrative APIs, history and actor details remain private.
+
+The public API has no rate limiting. Production exposure requires an
+abuse-prevention and traffic-limiting decision. The storefront UI, product
+photos, cart and checkout are not implemented.
+
 #### Audit, access, and isolation
 
 Item types, products, variants, and stock records need creation and latest

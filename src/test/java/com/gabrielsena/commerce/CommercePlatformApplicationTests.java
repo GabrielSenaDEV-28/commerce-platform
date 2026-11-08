@@ -29,6 +29,7 @@ import com.gabrielsena.commerce.catalog.domain.SizeFormat;
 import com.gabrielsena.commerce.inventory.application.InventoryService;
 import com.gabrielsena.commerce.inventory.application.InventoryService.MovementType;
 import com.gabrielsena.commerce.store.StoreRepository;
+import com.gabrielsena.commerce.store.PublicStoreResolver;
 import com.gabrielsena.commerce.store.domain.Store;
 import com.gabrielsena.commerce.store.domain.Subdomain;
 import com.jayway.jsonpath.JsonPath;
@@ -703,6 +704,140 @@ class CommercePlatformApplicationTests {
 				.andExpect(jsonPath("$.content[0].enabledQuantity").value(0));
 		productService.setActive(actor.id(), product.getId(), true);
 		mockMvc.perform(get(summary).header("Authorization", token)).andExpect(jsonPath("$.enabledQuantity").value(5));
+	}
+
+	@Test
+	void publicCatalogShouldShowOnlyActiveProductsAndVariantsWithStockAndPrices() throws Exception {
+		CatalogActor actor = catalogActor();
+		CatalogActor other = catalogActor();
+		String host = storefrontHost(actor);
+		InventoryFixture otherProduct = inventoryFixture(other);
+		ItemType type = itemTypeService.create(actor.id(), new ItemTypeValues("Shirts", true, true, SizeFormat.LETTER));
+		Product product = productService.create(actor.id(), new ProductRequest(type.getId(), "SHIRT", "Shirt",
+				"Cotton", new BigDecimal("100.00"), List.of(
+				new VariantRequest("Black", "M", null),
+				new VariantRequest("White", "L", new BigDecimal("120.00")),
+				new VariantRequest("Blue", "S", null))));
+		UUID black = jdbcTemplate.queryForObject("SELECT variant_id FROM catalog_product_variants WHERE product_id = ? AND color = ?",
+				UUID.class, product.getId(), "Black");
+		UUID blue = jdbcTemplate.queryForObject("SELECT variant_id FROM catalog_product_variants WHERE product_id = ? AND color = ?",
+				UUID.class, product.getId(), "Blue");
+		inventoryService.move(actor.id(), product.getId(), black, MovementType.ENTRY, 5, "Delivery", UUID.randomUUID());
+		productService.setVariantActive(actor.id(), product.getId(), blue, false);
+		Product inactive = productService.create(actor.id(), new ProductRequest(type.getId(), "OTHER", "Inactive",
+				"Description", BigDecimal.TEN, List.of(new VariantRequest("Black", "M", null))));
+		productService.setActive(actor.id(), inactive.getId(), false);
+		Product noActive = productService.create(actor.id(), new ProductRequest(type.getId(), "NONE", "No variants",
+				"Description", BigDecimal.TEN, List.of(new VariantRequest("Black", "M", null))));
+		UUID only = jdbcTemplate.queryForObject("SELECT variant_id FROM catalog_product_variants WHERE product_id = ?",
+				UUID.class, noActive.getId());
+		productService.setVariantActive(actor.id(), noActive.getId(), only, false);
+		String path = "/api/public/catalog/products";
+		mockMvc.perform(get(path).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1))
+				.andExpect(jsonPath("$.content[0].name").value("Shirt"))
+				.andExpect(jsonPath("$.content[0].price").value(100.00))
+				.andExpect(jsonPath("$.content[0].createdBy").doesNotExist())
+				.andExpect(jsonPath("$.content[0].sku").doesNotExist());
+		mockMvc.perform(get(path + "/{id}", product.getId()).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.description").value("Cotton"));
+		String variants = mockMvc.perform(get(path + "/{id}/variants", product.getId())
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(2))
+				.andReturn().getResponse().getContentAsString();
+		assertEquals(List.of(5), JsonPath.read(variants, "$.content[?(@.color == 'Black')].quantity"));
+		assertEquals(List.of(true), JsonPath.read(variants, "$.content[?(@.color == 'Black')].available"));
+		assertEquals(List.of(0), JsonPath.read(variants, "$.content[?(@.color == 'White')].quantity"));
+		assertEquals(List.of(false), JsonPath.read(variants, "$.content[?(@.color == 'White')].available"));
+		assertEquals(List.of(120.0), JsonPath.read(variants, "$.content[?(@.color == 'White')].price"));
+		mockMvc.perform(get(path + "/{id}", inactive.getId()).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get(path + "/{id}", noActive.getId()).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get(path + "/{id}/variants", inactive.getId()).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get(path + "/{id}", product.getId()).with(request -> { request.setServerName(storefrontHost(other)); return request; }))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get(path).with(request -> { request.setServerName(storefrontHost(other)); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1))
+				.andExpect(jsonPath("$.content[0].id").value(otherProduct.productId().toString()));
+		mockMvc.perform(get(path + "/{id}/variants", product.getId()).with(request -> { request.setServerName(storefrontHost(other)); return request; }))
+				.andExpect(status().isNotFound());
+	}
+
+	@Test
+	void publicCatalogShouldValidateHostPaginationAndSecurity() throws Exception {
+		CatalogActor actor = catalogActor();
+		String host = storefrontHost(actor);
+		InventoryFixture fixture = inventoryFixture(actor);
+		String path = "/api/public/catalog/products";
+		for (String invalid : List.of("localhost", "unknown.localhost", "nested." + host,
+				host + ".evil.example", "evil.example")) {
+			mockMvc.perform(get(path).with(request -> { request.setServerName(invalid); return request; }))
+					.andExpect(status().isNotFound());
+		}
+		mockMvc.perform(get(path).header("X-Forwarded-Host", host)
+						.with(request -> { request.setServerName("evil.example"); return request; }))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get(path).with(request -> { request.setServerName(host.toUpperCase()); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1));
+		mockMvc.perform(get(path).with(request -> { request.setServerName(host); return request; }).param("size", "101"))
+				.andExpect(status().isBadRequest());
+		mockMvc.perform(get(path).with(request -> { request.setServerName(host); return request; }).param("page", "-1"))
+				.andExpect(status().isBadRequest());
+		mockMvc.perform(get(path + "/{id}/variants", fixture.productId())
+						.with(request -> { request.setServerName(host); return request; }).param("size", "1"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1))
+				.andExpect(jsonPath("$.content[0].quantity").value(0))
+				.andExpect(jsonPath("$.content[0].available").value(false));
+		mockMvc.perform(post(path).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isUnauthorized());
+		mockMvc.perform(get("/api/products")).andExpect(status().isUnauthorized());
+		mockMvc.perform(get("/api/inventory/products")).andExpect(status().isUnauthorized());
+		mockMvc.perform(get(path + "/{id}/history", fixture.productId())
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	void publicCatalogShouldPaginateProductsAndVariants() throws Exception {
+		CatalogActor actor = catalogActor();
+		String host = storefrontHost(actor);
+		ItemType type = itemTypeService.create(actor.id(), new ItemTypeValues("Shoes", true, false, null));
+		Product alpha = productService.create(actor.id(), new ProductRequest(type.getId(), "A", "Alpha",
+				"Description", BigDecimal.TEN, List.of(new VariantRequest("Black", null, null),
+				new VariantRequest("White", null, null))));
+		productService.create(actor.id(), new ProductRequest(type.getId(), "B", "Beta",
+				"Description", BigDecimal.TEN, List.of(new VariantRequest("Blue", null, null))));
+		String path = "/api/public/catalog/products";
+		mockMvc.perform(get(path).with(request -> { request.setServerName(host); return request; }).param("size", "1"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(2))
+				.andExpect(jsonPath("$.totalPages").value(2)).andExpect(jsonPath("$.content[0].name").value("Alpha"));
+		mockMvc.perform(get(path).with(request -> { request.setServerName(host); return request; })
+						.param("size", "1").param("page", "1"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.content[0].name").value("Beta"));
+		mockMvc.perform(get(path + "/{id}/variants", alpha.getId())
+						.with(request -> { request.setServerName(host); return request; }).param("size", "1"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(2))
+				.andExpect(jsonPath("$.totalPages").value(2));
+	}
+
+	private String storefrontHost(CatalogActor actor) {
+		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
+		return storeRepository.findByMerchantId(merchantId).orElseThrow().getSubdomain().getValue() + ".localhost";
+	}
+
+	@Test
+	void publicStoreResolverShouldValidateConfiguredDomains() {
+		CatalogActor actor = catalogActor();
+		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
+		Store store = storeRepository.findByMerchantId(merchantId).orElseThrow();
+		var resolver = new PublicStoreResolver(storeRepository, "Stores.Example.com");
+		assertEquals(store.getId(), resolver.resolve(store.getSubdomain().getValue() + ".stores.example.com"));
+		assertThrows(ResponseStatusException.class, () -> resolver.resolve(store.getSubdomain().getValue() + ".localhost"));
+		assertThrows(ResponseStatusException.class, () -> resolver.resolve("nested." + store.getSubdomain().getValue() + ".stores.example.com"));
+		assertThrows(IllegalArgumentException.class, () -> new PublicStoreResolver(storeRepository, "https://example.com"));
+		assertThrows(IllegalArgumentException.class, () -> new PublicStoreResolver(storeRepository, "*.example.com"));
 	}
 
 	@Test
