@@ -80,6 +80,7 @@ public class SecurityConfiguration {
                         .requestMatchers(HttpMethod.GET, "/api/public/catalog/products",
                                 "/api/public/catalog/products/{productId}",
                                 "/api/public/catalog/products/{productId}/variants").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/public/pickup").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/cart").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/public/cart").permitAll()
                         .requestMatchers(HttpMethod.PUT, "/api/public/cart/items/{productId}/{variantId}").permitAll()

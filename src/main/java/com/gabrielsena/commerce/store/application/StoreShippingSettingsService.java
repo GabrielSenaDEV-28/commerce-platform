@@ -10,8 +10,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -35,6 +37,38 @@ public class StoreShippingSettingsService {
                            @NotBlank @Pattern(regexp = "AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO") String state,
                            @NotNull Boolean pickupEnabled,
                            @Size(max = 1000) String pickupInstructions) { }
+
+    public record PickupAddress(String postalCode, String street, String number, String complement,
+                                String district, String city, String state, String country) { }
+    public record PickupOption(boolean available, PickupAddress address, String instructions) { }
+
+    @Transactional(readOnly = true)
+    public PickupOption pickupOption(UUID store) {
+        return pickupOptions(store, false).stream().findFirst()
+                .orElse(new PickupOption(false, null, null));
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public PickupOption lockAvailablePickup(UUID store) {
+        return pickupOptions(store, true).stream().findFirst()
+                .filter(PickupOption::available)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Pickup is not available."));
+    }
+
+    private List<PickupOption> pickupOptions(UUID store, boolean lock) {
+        return jdbc.query("""
+                SELECT postal_code, street, house_number, complement, district, city, state,
+                       pickup_enabled, pickup_instructions
+                FROM store_shipping_settings WHERE store_id = ?
+                """ + (lock ? " FOR SHARE" : ""), (rs, row) -> {
+            if (!rs.getBoolean("pickup_enabled")) {
+                return new PickupOption(false, null, null);
+            }
+            return new PickupOption(true, new PickupAddress(rs.getString("postal_code"), rs.getString("street"),
+                    rs.getString("house_number"), rs.getString("complement"), rs.getString("district"),
+                    rs.getString("city"), rs.getString("state"), "BR"), rs.getString("pickup_instructions"));
+        }, store);
+    }
 
     @Transactional(readOnly = true)
     public Settings get(UUID actor) {

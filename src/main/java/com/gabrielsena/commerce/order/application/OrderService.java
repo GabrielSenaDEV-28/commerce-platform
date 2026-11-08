@@ -5,6 +5,9 @@ import com.gabrielsena.commerce.catalog.CatalogStoreResolver;
 import com.gabrielsena.commerce.customer.application.CustomerAuthService.Customer;
 import com.gabrielsena.commerce.customer.application.CustomerProfileService;
 import com.gabrielsena.commerce.customer.application.CustomerProfileService.Address;
+import com.gabrielsena.commerce.store.application.StoreShippingSettingsService;
+import com.gabrielsena.commerce.store.application.StoreShippingSettingsService.PickupAddress;
+import com.gabrielsena.commerce.store.application.StoreShippingSettingsService.PickupOption;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -26,25 +29,29 @@ public class OrderService {
     private final ShoppingCartService carts;
     private final CatalogStoreResolver stores;
     private final CustomerProfileService profiles;
+    private final StoreShippingSettingsService shippingSettings;
 
     public OrderService(JdbcTemplate jdbc, ShoppingCartService carts, CatalogStoreResolver stores,
-                        CustomerProfileService profiles) {
+                        CustomerProfileService profiles, StoreShippingSettingsService shippingSettings) {
         this.jdbc = jdbc;
         this.carts = carts;
         this.stores = stores;
         this.profiles = profiles;
+        this.shippingSettings = shippingSettings;
     }
 
+    public enum FulfillmentType { DELIVERY, PICKUP }
     public record OrderItem(UUID productId, UUID variantId, String name, String color, String size,
                             BigDecimal unitPrice, int quantity) { }
     public record Order(UUID id, UUID reservationId, String customerName, String customerEmail,
                         String status, Instant createdAt, Instant expiresAt, BigDecimal total,
-                        List<OrderItem> items, Delivery delivery) { }
+                        List<OrderItem> items, Delivery delivery, FulfillmentType fulfillmentType, Pickup pickup) { }
     public record Delivery(String phone, Address address) { }
+    public record Pickup(String phone, PickupAddress address, String instructions, BigDecimal cost) { }
     public record OrderSummary(UUID id, String customerName, String customerEmail, String status,
-                               Instant createdAt, Instant expiresAt, BigDecimal total) { }
+                               Instant createdAt, Instant expiresAt, BigDecimal total, FulfillmentType fulfillmentType) { }
     private record OrderRow(UUID id, UUID reservationId, UUID customerId, String name, String email, boolean acceptedPartial,
-                            UUID addressId, String status, Instant createdAt, Instant expiresAt) { }
+                            UUID addressId, FulfillmentType fulfillmentType, String status, Instant createdAt, Instant expiresAt) { }
 
     private static final String STATUS = """
             CASE WHEN r.cancelled_at IS NOT NULL THEN 'CANCELLED'
@@ -54,6 +61,16 @@ public class OrderService {
 
     @Transactional
     public Order create(UUID store, String token, UUID reservationId, Customer customer, boolean acceptPartial, UUID addressId) {
+        return create(store, token, reservationId, customer, acceptPartial, addressId, FulfillmentType.DELIVERY);
+    }
+
+    @Transactional
+    public Order create(UUID store, String token, UUID reservationId, Customer customer, boolean acceptPartial,
+                        UUID addressId, FulfillmentType fulfillmentType) {
+        if (fulfillmentType == null || (fulfillmentType == FulfillmentType.PICKUP && addressId != null)
+                || (fulfillmentType == FulfillmentType.DELIVERY && addressId == null)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid fulfillment details.");
+        }
         UUID cart = carts.cartId(store, token, true);
         List<OrderRow> existing = rows("""
                 WHERE o.store_id = ? AND r.cart_id = ? AND o.reservation_id = ?
@@ -61,7 +78,7 @@ public class OrderService {
         if (!existing.isEmpty()) {
             OrderRow order = existing.getFirst();
             if (!customer.id().equals(order.customerId()) || order.acceptedPartial() != acceptPartial
-                    || !Objects.equals(order.addressId(), addressId)) {
+                    || !Objects.equals(order.addressId(), addressId) || order.fulfillmentType() != fulfillmentType) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Order request differs from the original.");
             }
             return order(store, order);
@@ -83,24 +100,35 @@ public class OrderService {
         if (profile.phone() == null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "A customer phone is required.");
         }
-        Address address = profiles.get(store, customer.id(), addressId);
+        Address address = fulfillmentType == FulfillmentType.DELIVERY ? profiles.get(store, customer.id(), addressId) : null;
+        PickupOption pickup = fulfillmentType == FulfillmentType.PICKUP ? shippingSettings.lockAvailablePickup(store) : null;
         UUID id = UUID.randomUUID();
         int inserted = jdbc.update("""
                 INSERT INTO commerce_orders (order_id, store_id, reservation_id, customer_id, customer_name, customer_email,
-                    accepted_partial, created_at)
-                SELECT ?, store_id, reservation_id, ?, ?, ?, ?, clock_timestamp()
+                    accepted_partial, fulfillment_type, created_at)
+                SELECT ?, store_id, reservation_id, ?, ?, ?, ?, ?, clock_timestamp()
                 FROM checkout_reservations WHERE store_id = ? AND cart_id = ? AND reservation_id = ?
                   AND cancelled_at IS NULL AND expires_at > clock_timestamp()
-                """, id, customer.id(), profile.name(), profile.email(), acceptPartial, store, cart, reservationId);
+                """, id, customer.id(), profile.name(), profile.email(), acceptPartial, fulfillmentType.name(), store, cart, reservationId);
         if (inserted == 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Checkout reservation is not active.");
         }
-        jdbc.update("""
+        if (address != null) {
+            jdbc.update("""
                 INSERT INTO order_delivery_details (store_id, order_id, address_id, phone, recipient, postal_code,
                     street, house_number, complement, district, city, state)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, store, id, address.id(), profile.phone(), address.recipient(), address.postalCode(),
                 address.street(), address.number(), address.complement(), address.district(), address.city(), address.state());
+        } else {
+            PickupAddress location = pickup.address();
+            jdbc.update("""
+                    INSERT INTO order_pickup_details (store_id, order_id, phone, postal_code, street, house_number,
+                        complement, district, city, state, instructions)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, store, id, profile.phone(), location.postalCode(), location.street(), location.number(),
+                    location.complement(), location.district(), location.city(), location.state(), pickup.instructions());
+        }
         jdbc.update("""
                 INSERT INTO commerce_order_items (store_id, order_id, product_id, variant_id, product_name,
                     color, size, unit_price, quantity)
@@ -159,7 +187,7 @@ public class OrderService {
                 ? new Object[]{store, page.getPageSize(), page.getOffset()}
                 : new Object[]{store, customer, page.getPageSize(), page.getOffset()};
         List<OrderSummary> result = jdbc.query("""
-                SELECT o.order_id, o.customer_name, o.customer_email, %s AS status, o.created_at, r.expires_at,
+                SELECT o.order_id, o.customer_name, o.customer_email, o.fulfillment_type, %s AS status, o.created_at, r.expires_at,
                     (SELECT SUM(i.unit_price * i.quantity) FROM commerce_order_items i
                      WHERE i.store_id = o.store_id AND i.order_id = o.order_id) AS total
                 FROM commerce_orders o JOIN checkout_reservations r
@@ -169,7 +197,7 @@ public class OrderService {
                 (rs, row) -> new OrderSummary(rs.getObject("order_id", UUID.class),
                 rs.getString("customer_name"), rs.getString("customer_email"), rs.getString("status"),
                 rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("expires_at").toInstant(),
-                rs.getBigDecimal("total")), queryArgs);
+                rs.getBigDecimal("total"), FulfillmentType.valueOf(rs.getString("fulfillment_type"))), queryArgs);
         return new PageImpl<>(result, page, count);
     }
 
@@ -185,14 +213,15 @@ public class OrderService {
 
     private List<OrderRow> rows(String where, Object... args) {
         return jdbc.query("""
-                SELECT o.order_id, o.reservation_id, o.customer_id, o.customer_name, o.customer_email, o.accepted_partial, d.address_id,
+                SELECT o.order_id, o.reservation_id, o.customer_id, o.customer_name, o.customer_email, o.accepted_partial, d.address_id, o.fulfillment_type,
                        %s AS status, o.created_at, r.expires_at
                 FROM commerce_orders o JOIN checkout_reservations r
                   ON r.store_id = o.store_id AND r.reservation_id = o.reservation_id
                 LEFT JOIN order_delivery_details d ON d.store_id = o.store_id AND d.order_id = o.order_id
                 """.formatted(STATUS) + where, (rs, row) -> new OrderRow(rs.getObject("order_id", UUID.class),
                 rs.getObject("reservation_id", UUID.class), rs.getObject("customer_id", UUID.class), rs.getString("customer_name"),
-                rs.getString("customer_email"), rs.getBoolean("accepted_partial"), rs.getObject("address_id", UUID.class), rs.getString("status"),
+                rs.getString("customer_email"), rs.getBoolean("accepted_partial"), rs.getObject("address_id", UUID.class),
+                FulfillmentType.valueOf(rs.getString("fulfillment_type")), rs.getString("status"),
                 rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("expires_at").toInstant()), args);
     }
 
@@ -212,7 +241,15 @@ public class OrderService {
                         rs.getString("postal_code"), rs.getString("street"), rs.getString("house_number"),
                         rs.getString("complement"), rs.getString("district"), rs.getString("city"),
                         rs.getString("state"), "BR")), store, row.id());
+        List<Pickup> pickups = jdbc.query("""
+                SELECT * FROM order_pickup_details WHERE store_id = ? AND order_id = ?
+                """, (rs, number) -> new Pickup(rs.getString("phone"),
+                new PickupAddress(rs.getString("postal_code"), rs.getString("street"), rs.getString("house_number"),
+                        rs.getString("complement"), rs.getString("district"), rs.getString("city"),
+                        rs.getString("state"), "BR"), rs.getString("instructions"), new BigDecimal("0.00")),
+                store, row.id());
         return new Order(row.id(), row.reservationId(), row.name(), row.email(), row.status(),
-                row.createdAt(), row.expiresAt(), total, items, details.isEmpty() ? null : details.getFirst());
+                row.createdAt(), row.expiresAt(), total, items, details.isEmpty() ? null : details.getFirst(),
+                row.fulfillmentType(), pickups.isEmpty() ? null : pickups.getFirst());
     }
 }

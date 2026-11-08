@@ -3,12 +3,14 @@ package com.gabrielsena.commerce.order.api;
 import com.gabrielsena.commerce.order.application.OrderService;
 import com.gabrielsena.commerce.order.application.OrderService.Order;
 import com.gabrielsena.commerce.order.application.OrderService.OrderSummary;
+import com.gabrielsena.commerce.order.application.OrderService.FulfillmentType;
 import com.gabrielsena.commerce.customer.application.CustomerAuthService;
 import com.gabrielsena.commerce.api.PageResponse;
 import com.gabrielsena.commerce.store.PublicStoreResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.AssertTrue;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -36,7 +38,12 @@ public class PublicOrderController {
         this.customers = customers;
     }
 
-    public record CreateOrderRequest(@NotNull Boolean acceptPartial, @NotNull UUID addressId) { }
+    public record CreateOrderRequest(@NotNull Boolean acceptPartial, UUID addressId, FulfillmentType fulfillmentType) {
+        @AssertTrue
+        public boolean isFulfillmentValid() {
+            return fulfillmentType == FulfillmentType.PICKUP ? addressId == null : addressId != null;
+        }
+    }
 
     @PostMapping("/api/public/checkout/{reservationId}/orders")
     public ResponseEntity<Order> create(HttpServletRequest request,
@@ -44,7 +51,8 @@ public class PublicOrderController {
             @AuthenticationPrincipal Jwt jwt, @PathVariable UUID reservationId, @Valid @RequestBody CreateOrderRequest body) {
         UUID store = stores.resolve(request.getServerName());
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(orders.create(
-                store, token, reservationId, customers.customer(store, jwt), body.acceptPartial(), body.addressId()));
+                store, token, reservationId, customers.customer(store, jwt), body.acceptPartial(), body.addressId(),
+                body.fulfillmentType() == null ? FulfillmentType.DELIVERY : body.fulfillmentType()));
     }
 
     @GetMapping("/api/public/orders/{orderId}")
