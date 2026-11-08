@@ -401,7 +401,7 @@ an outdated ID or no active reservation returns `409`. During an active reservat
 return `409`; cancel first to modify it. Attempts to reduce physical stock below
 active reservations or deactivate a reserved product or variant return `409`.
 Expired and cancelled reservations are retained; cleanup is not implemented.
-Prices in checkout are snapshots for review, not yet a completed sale.
+Prices in checkout are snapshots; creating a pending order is not a completed sale.
 
 The future UI must warn before cancellation that it releases the reserved
 items and the store cannot guarantee their subsequent availability.
@@ -416,6 +416,53 @@ Reservation duration configuration, multi-item checkout navigation,
 payment-pending expiry, recovery, cleanup and payment/order revalidation still
 need design before implementation. Production also needs abuse prevention and
 rate limiting; no throughput guarantee is established for live traffic.
+
+#### Pending orders
+
+`POST /api/public/checkout/{reservationId}/orders` creates a pending order
+for an active reservation. Use the store hostname and `Cart-Token` header,
+with a JSON body such as:
+
+```json
+{"customerName":"Ana","customerEmail":"ana@example.com","acceptPartial":false}
+```
+
+Name and email are required. If any checkout item was unavailable,
+`acceptPartial` must explicitly be `true`; only fully reserved items enter the
+order. Otherwise `false` is sufficient. The response is `200` with the order,
+including the checkout price and quantity and a snapshot of product name and
+variant attributes. `total` is the sum of item prices and quantities in BRL;
+it excludes shipping, which has not been implemented. Prices are captured
+from checkout; names and variant attributes are captured at order creation.
+
+There is at most one order per reservation. A repeat with the same normalized
+name, email and `acceptPartial` returns the original order, including after
+its expiration or cancellation. A changed request or an inactive reservation
+without an order returns `409`. No request extends the reservation. The order
+is `PENDING` only while the reservation is active, becomes `EXPIRED` when the
+deadline passes, and becomes `CANCELLED` when checkout is cancelled. Status is
+derived from the reservation, so expiration and stock release do not require a
+background job. A customer needs a new checkout after expiry.
+
+`GET /api/public/orders/{orderId}` requires the same store hostname and
+`Cart-Token`; `GET /api/orders` and `GET /api/orders/{orderId}` require a
+merchant bearer token and are scoped to that merchant's store. The merchant
+list accepts zero-based `page` and `size`, default 20 and maximum 100.
+Responses containing customer information use `Cache-Control: no-store`.
+Customer access currently lasts only as long as the cart token remains valid;
+losing it or cart expiration prevents customer retrieval. The merchant retains
+access. Orders and personal data are retained without automatic deletion;
+retention, privacy policy and secure customer recovery require future design.
+
+This block does not implement a customer account, customer login, managed
+contact information or addresses, shipping, order confirmation, payment
+processing or physical stock deduction. Customer profiles and those details
+need future branches. A payment provider (such as PagBank or Mercado Pago)
+has not been selected. Payment data handling, provider integration, payment
+expiration, asynchronous confirmation, secure webhooks, idempotency, and
+atomic reservation-to-sale conversion require a separate design. Do not store
+card numbers or security codes in this application. Without those capabilities,
+pending orders cannot be paid or fulfilled.
 
 #### Audit, access, and isolation
 

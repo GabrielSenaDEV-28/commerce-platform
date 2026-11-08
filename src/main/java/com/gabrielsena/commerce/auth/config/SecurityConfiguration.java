@@ -82,6 +82,8 @@ public class SecurityConfiguration {
                         .requestMatchers(HttpMethod.POST, "/api/public/checkout",
                                 "/api/public/checkout/{reservationId}/cancel").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/public/checkout").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/public/checkout/{reservationId}/orders").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/public/orders/{orderId}").permitAll()
                         .anyRequest().authenticated()
                 )
                 .oauth2ResourceServer(resourceServer -> resourceServer.jwt(Customizer.withDefaults()))

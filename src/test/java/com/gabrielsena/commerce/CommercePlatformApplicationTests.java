@@ -28,6 +28,7 @@ import com.gabrielsena.commerce.catalog.domain.Product;
 import com.gabrielsena.commerce.catalog.domain.SizeFormat;
 import com.gabrielsena.commerce.cart.application.ShoppingCartService;
 import com.gabrielsena.commerce.checkout.application.CheckoutReservationService;
+import com.gabrielsena.commerce.order.application.OrderService;
 import com.gabrielsena.commerce.inventory.application.InventoryService;
 import com.gabrielsena.commerce.inventory.application.InventoryService.MovementType;
 import com.gabrielsena.commerce.store.StoreRepository;
@@ -132,6 +133,9 @@ class CommercePlatformApplicationTests {
 
 	@Autowired
 	private CheckoutReservationService checkoutReservationService;
+
+	@Autowired
+	private OrderService orderService;
 
 	@Autowired
 	private JwtEncoder jwtEncoder;
@@ -833,6 +837,187 @@ class CommercePlatformApplicationTests {
 	private String storefrontHost(CatalogActor actor) {
 		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
 		return storeRepository.findByMerchantId(merchantId).orElseThrow().getSubdomain().getValue() + ".localhost";
+	}
+
+	@Test
+	void pendingOrderShouldRequirePartialAcceptanceAndProtectCustomerData() throws Exception {
+		CatalogActor actor = catalogActor();
+		CatalogActor other = catalogActor();
+		String host = storefrontHost(actor);
+		ItemType type = itemTypeService.create(actor.id(), new ItemTypeValues("Shirts", true, false, null));
+		Product product = productService.create(actor.id(), new ProductRequest(type.getId(), "SHIRT", "Shirt",
+				"Cotton", new BigDecimal("10.00"), List.of(new VariantRequest("Black", null, null),
+				new VariantRequest("White", null, new BigDecimal("15.00")))));
+		UUID black = jdbcTemplate.queryForObject("SELECT variant_id FROM catalog_product_variants WHERE product_id = ? AND color = 'Black'",
+				UUID.class, product.getId());
+		UUID white = jdbcTemplate.queryForObject("SELECT variant_id FROM catalog_product_variants WHERE product_id = ? AND color = 'White'",
+				UUID.class, product.getId());
+		inventoryService.move(actor.id(), product.getId(), black, MovementType.ENTRY, 2, "Delivery", UUID.randomUUID());
+		inventoryService.move(actor.id(), product.getId(), white, MovementType.ENTRY, 1, "Delivery", UUID.randomUUID());
+		String cartJson = mockMvc.perform(post("/api/public/cart").with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+		String token = JsonPath.read(cartJson, "$.token");
+		for (UUID variant : List.of(black, white)) {
+			mockMvc.perform(put("/api/public/cart/items/{product}/{variant}", product.getId(), variant)
+							.header("Cart-Token", token).contentType(APPLICATION_JSON).content("{\"quantity\":1}")
+							.with(request -> { request.setServerName(host); return request; }))
+					.andExpect(status().isOk());
+		}
+		inventoryService.move(actor.id(), product.getId(), white, MovementType.EXIT, 1, "Adjustment", UUID.randomUUID());
+		String checkout = mockMvc.perform(post("/api/public/checkout").header("Cart-Token", token)
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+		String reservation = JsonPath.read(checkout, "$.id");
+		String orderPath = "/api/public/checkout/" + reservation + "/orders";
+		String body = "{\"customerName\":\" Ana \",\"customerEmail\":\"ana@example.com\",\"acceptPartial\":true}";
+		mockMvc.perform(post(orderPath).header("Cart-Token", token).contentType(APPLICATION_JSON)
+						.content("{\"customerName\":\"Ana\",\"customerEmail\":\"ana@example.com\",\"acceptPartial\":false}")
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isConflict());
+		mockMvc.perform(post(orderPath).header("Cart-Token", token).contentType(APPLICATION_JSON)
+						.content("{\"customerName\":\"Ana\",\"customerEmail\":\"invalid\",\"acceptPartial\":true}")
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isBadRequest());
+		String order = mockMvc.perform(post(orderPath).header("Cart-Token", token).contentType(APPLICATION_JSON)
+						.content(body).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.status").value("PENDING"))
+				.andExpect(jsonPath("$.customerName").value("Ana"))
+				.andExpect(jsonPath("$.items.length()").value(1)).andExpect(jsonPath("$.total").value(10))
+				.andExpect(jsonPath("$.items[0].variantId").value(black.toString()))
+				.andExpect(result -> assertEquals("no-store", result.getResponse().getHeader("Cache-Control")))
+				.andReturn().getResponse().getContentAsString();
+		String id = JsonPath.read(order, "$.id");
+		mockMvc.perform(post(orderPath).header("Cart-Token", token).contentType(APPLICATION_JSON)
+						.content(body).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.id").value(id));
+		mockMvc.perform(post(orderPath).header("Cart-Token", token).contentType(APPLICATION_JSON)
+						.content("{\"customerName\":\"Other\",\"customerEmail\":\"ana@example.com\",\"acceptPartial\":true}")
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isConflict());
+		productService.updateVariantPrice(actor.id(), product.getId(), black, new BigDecimal("25.00"));
+		mockMvc.perform(get("/api/public/orders/{id}", id).header("Cart-Token", token)
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.items[0].unitPrice").value(10));
+		String otherCart = mockMvc.perform(post("/api/public/cart").with(request -> { request.setServerName(host); return request; }))
+				.andReturn().getResponse().getContentAsString();
+		String otherToken = JsonPath.read(otherCart, "$.token");
+		mockMvc.perform(get("/api/public/orders/{id}", id).header("Cart-Token", otherToken)
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get("/api/public/orders/{id}", id).header("Cart-Token", token)
+						.with(request -> { request.setServerName(storefrontHost(other)); return request; }))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get("/api/orders/{id}", id)).andExpect(status().isUnauthorized());
+		mockMvc.perform(get("/api/orders/{id}", id).header("Authorization", "Bearer " + other.token()))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get("/api/orders/{id}", id).header("Authorization", "Bearer " + actor.token()))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.customerEmail").value("ana@example.com"));
+		mockMvc.perform(get("/api/orders").header("Authorization", "Bearer " + actor.token()).param("size", "1"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1))
+				.andExpect(jsonPath("$.content[0].total").value(10));
+		mockMvc.perform(get("/api/orders").header("Authorization", "Bearer " + other.token()))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(0));
+		mockMvc.perform(post("/api/public/checkout/{id}/cancel", reservation).header("Cart-Token", token)
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk());
+		mockMvc.perform(get("/api/public/orders/{id}", id).header("Cart-Token", token)
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.status").value("CANCELLED"));
+		assertEquals(2, inventoryService.balance(actor.id(), product.getId(), black).quantity());
+	}
+
+	@Test
+	void pendingOrderShouldExpireAndRejectCreationWithStaleCheckout() {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
+		UUID store = storeRepository.findByMerchantId(merchantId).orElseThrow().getId();
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Delivery", UUID.randomUUID());
+		String token = shoppingCartService.create(store).token();
+		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
+		var first = checkoutReservationService.start(store, token);
+		var order = orderService.create(store, token, first.id(), "Ana", "ana@example.com", false);
+		jdbcTemplate.update("""
+				UPDATE checkout_reservations SET created_at = clock_timestamp() - INTERVAL '21 minutes',
+				expires_at = clock_timestamp() - INTERVAL '1 minute' WHERE reservation_id = ?
+				""", first.id());
+		assertEquals("EXPIRED", orderService.customerOrder(store, token, order.id()).status());
+		assertEquals("EXPIRED", orderService.create(store, token, first.id(), "Ana", "ana@example.com", false).status());
+		var second = checkoutReservationService.start(store, token);
+		assertNotEquals(first.id(), second.id());
+		checkoutReservationService.cancel(store, token, second.id());
+		assertEquals(409, assertThrows(ResponseStatusException.class, () -> orderService.create(
+				store, token, second.id(), "Ana", "ana@example.com", false)).getStatusCode().value());
+		var third = checkoutReservationService.start(store, token);
+		jdbcTemplate.update("""
+				UPDATE checkout_reservations SET created_at = clock_timestamp() - INTERVAL '21 minutes',
+				expires_at = clock_timestamp() - INTERVAL '1 minute' WHERE reservation_id = ?
+				""", third.id());
+		assertEquals(409, assertThrows(ResponseStatusException.class, () -> orderService.create(
+				store, token, third.id(), "Ana", "ana@example.com", false)).getStatusCode().value());
+		assertEquals(0, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM commerce_orders WHERE reservation_id = ?",
+				Integer.class, third.id()));
+		assertEquals(1, inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId()).quantity());
+	}
+
+	@Test
+	void pendingOrderCreationShouldBeIdempotentUnderConcurrency() throws Exception {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
+		UUID store = storeRepository.findByMerchantId(merchantId).orElseThrow().getId();
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Delivery", UUID.randomUUID());
+		String token = shoppingCartService.create(store).token();
+		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
+		var checkout = checkoutReservationService.start(store, token);
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		try {
+			List<Future<OrderService.Order>> calls = List.of(
+					executor.submit(() -> { start.await(); return orderService.create(store, token, checkout.id(), "Ana", "ana@example.com", false); }),
+					executor.submit(() -> { start.await(); return orderService.create(store, token, checkout.id(), "Ana", "ana@example.com", false); }));
+			start.countDown();
+			assertEquals(calls.getFirst().get(30, TimeUnit.SECONDS).id(), calls.getLast().get(30, TimeUnit.SECONDS).id());
+			assertEquals(1, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM commerce_orders WHERE reservation_id = ?",
+					Integer.class, checkout.id()));
+		} finally {
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
+	void pendingOrderAndCheckoutCancellationShouldSerialize() throws Exception {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
+		UUID store = storeRepository.findByMerchantId(merchantId).orElseThrow().getId();
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Delivery", UUID.randomUUID());
+		String token = shoppingCartService.create(store).token();
+		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
+		var checkout = checkoutReservationService.start(store, token);
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		try {
+			Future<OrderService.Order> order = executor.submit(() -> {
+				start.await(); return orderService.create(store, token, checkout.id(), "Ana", "ana@example.com", false);
+			});
+			Future<?> cancel = executor.submit(() -> {
+				start.await(); return checkoutReservationService.cancel(store, token, checkout.id());
+			});
+			start.countDown();
+			cancel.get(30, TimeUnit.SECONDS);
+			try {
+				var created = order.get(30, TimeUnit.SECONDS);
+				assertEquals("CANCELLED", orderService.customerOrder(store, token, created.id()).status());
+			} catch (ExecutionException exception) {
+				assertEquals(409, assertInstanceOf(ResponseStatusException.class, exception.getCause()).getStatusCode().value());
+				assertEquals(0, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM commerce_orders WHERE reservation_id = ?",
+						Integer.class, checkout.id()));
+			}
+			assertEquals(1, shoppingCartService.get(store, token).items().getFirst().stockQuantity());
+		} finally {
+			executor.shutdownNow();
+		}
 	}
 
 	@Test
