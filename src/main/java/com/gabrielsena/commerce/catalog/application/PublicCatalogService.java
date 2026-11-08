@@ -17,12 +17,14 @@ import java.util.UUID;
 @Service
 public class PublicCatalogService {
     private final JdbcTemplate jdbc;
+    private final ProductPhotoStorage storage;
 
-    public PublicCatalogService(JdbcTemplate jdbc) {
+    public PublicCatalogService(JdbcTemplate jdbc, ProductPhotoStorage storage) {
         this.jdbc = jdbc;
+        this.storage = storage;
     }
 
-    public record PublicProduct(UUID id, String name, String description, BigDecimal price) { }
+    public record PublicProduct(UUID id, String name, String description, BigDecimal price, List<String> photos) { }
     public record PublicVariant(UUID id, String color, String size, BigDecimal price, int quantity, boolean available) { }
 
     private static final String VISIBLE_PRODUCT = """
@@ -37,10 +39,13 @@ public class PublicCatalogService {
         Long count = jdbc.queryForObject("SELECT COUNT(*) FROM catalog_products p WHERE " + VISIBLE_PRODUCT,
                 Long.class, store);
         List<PublicProduct> result = jdbc.query("""
-                SELECT p.product_id, p.name, p.description, p.price FROM catalog_products p WHERE
+                SELECT p.product_id, p.name, p.description, p.price,
+                       ARRAY(SELECT object_key FROM catalog_product_photos ph
+                             WHERE ph.store_id = p.store_id AND ph.product_id = p.product_id AND ph.status = 'READY'
+                             ORDER BY ph.position, ph.photo_id) AS photos
+                FROM catalog_products p WHERE
                 """ + VISIBLE_PRODUCT + " ORDER BY p.name, p.product_id LIMIT ? OFFSET ?",
-                (rs, row) -> new PublicProduct(rs.getObject("product_id", UUID.class), rs.getString("name"),
-                        rs.getString("description"), rs.getBigDecimal("price")),
+                (rs, row) -> publicProduct(rs),
                 store, page.getPageSize(), page.getOffset());
         return new PageImpl<>(result, page, Objects.requireNonNull(count));
     }
@@ -48,14 +53,24 @@ public class PublicCatalogService {
     @Transactional(readOnly = true)
     public PublicProduct product(UUID store, UUID productId) {
         List<PublicProduct> result = jdbc.query("""
-                SELECT p.product_id, p.name, p.description, p.price FROM catalog_products p WHERE
+                SELECT p.product_id, p.name, p.description, p.price,
+                       ARRAY(SELECT object_key FROM catalog_product_photos ph
+                             WHERE ph.store_id = p.store_id AND ph.product_id = p.product_id AND ph.status = 'READY'
+                             ORDER BY ph.position, ph.photo_id) AS photos
+                FROM catalog_products p WHERE
                 """ + VISIBLE_PRODUCT + " AND p.product_id = ?",
-                (rs, row) -> new PublicProduct(rs.getObject("product_id", UUID.class), rs.getString("name"),
-                        rs.getString("description"), rs.getBigDecimal("price")), store, productId);
+                (rs, row) -> publicProduct(rs), store, productId);
         if (result.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found.");
         }
         return result.getFirst();
+    }
+
+    private PublicProduct publicProduct(java.sql.ResultSet rs) throws java.sql.SQLException {
+        String[] keys = (String[]) rs.getArray("photos").getArray();
+        return new PublicProduct(rs.getObject("product_id", UUID.class), rs.getString("name"),
+                rs.getString("description"), rs.getBigDecimal("price"),
+                java.util.Arrays.stream(keys).map(storage::url).toList());
     }
 
     @Transactional(readOnly = true)
