@@ -391,9 +391,24 @@ while the reservation is active. It is an estimate, not a guarantee of
 provider price or availability, and is revalidated before order creation.
 Quotes and reservations are retained; cleanup is not yet implemented. Existing
 delivery orders may have no recorded shipping cost. The provider client targets
-sandbox only; no real sandbox validation has been completed. The public
-endpoints have no rate limiting, so abuse prevention and traffic limits are
-required before production exposure.
+sandbox only; no real sandbox validation has been completed.
+
+Cart creation, the three shipping estimate endpoints, and order creation are
+rate-limited by direct client IP across stores and application instances. The
+default fixed window is 15 minutes, with independent quotas of 20 cart creations,
+60 shipping estimates shared by product, cart and checkout, and 30 order
+creation attempts. All attempts count, including invalid requests, pickups and
+idempotent order retries. Configure `PUBLIC_RATE_LIMIT_CART_CREATE`,
+`PUBLIC_RATE_LIMIT_SHIPPING_QUOTE`, `PUBLIC_RATE_LIMIT_ORDER_CREATE` and
+`PUBLIC_RATE_LIMIT_WINDOW_SECONDS` consistently on every instance; values must
+be positive and the window at most 86400 seconds. Excess returns `429` with
+`PUBLIC_RATE_LIMITED`, `Retry-After` and `Cache-Control: no-store`; database
+errors fail closed with `503` and `PUBLIC_RATE_LIMIT_UNAVAILABLE`. Expired
+IP records are cleaned periodically. Cart editing, checkout reservations and
+other public operations are not covered. Direct IP and proxy limitations are
+the same as for authentication: clients behind one IP share a quota, and
+forwarded headers are not trusted. Distributed abuse and provider-wide
+capacity still require additional protection before production.
 
 #### Inventory
 
