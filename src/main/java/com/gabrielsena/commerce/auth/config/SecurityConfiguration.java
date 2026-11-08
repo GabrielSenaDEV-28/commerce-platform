@@ -18,6 +18,8 @@ import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
+import org.springframework.security.authorization.AuthorizationDecision;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.security.web.SecurityFilterChain;
 
 import javax.crypto.SecretKey;
@@ -67,6 +69,9 @@ public class SecurityConfiguration {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(HttpMethod.POST, "/api/merchants").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/public/customer-auth/register",
+                                "/api/public/customer-auth/login", "/api/public/customer-auth/refresh",
+                                "/api/public/customer-auth/logout").permitAll()
                         .requestMatchers(HttpMethod.POST,
                                 "/api/auth/login",
                                 "/api/auth/refresh",
@@ -82,9 +87,18 @@ public class SecurityConfiguration {
                         .requestMatchers(HttpMethod.POST, "/api/public/checkout",
                                 "/api/public/checkout/{reservationId}/cancel").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/public/checkout").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/public/checkout/{reservationId}/orders").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/public/checkout/{reservationId}/orders").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/public/orders/{orderId}").permitAll()
-                        .anyRequest().authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/public/customer/orders",
+                                "/api/public/customer/orders/{orderId}").authenticated()
+                        .anyRequest().access((authentication, context) -> {
+                            var auth = authentication.get();
+                            return new AuthorizationDecision(auth instanceof JwtAuthenticationToken jwt
+                                    && jwt.isAuthenticated()
+                                    && (jwt.getToken().getClaimAsString("account_type") == null
+                                        || "merchant".equals(jwt.getToken().getClaimAsString("account_type")))
+                                    && jwt.getToken().getClaimAsString("merchant_id") != null);
+                        })
                 )
                 .oauth2ResourceServer(resourceServer -> resourceServer.jwt(Customizer.withDefaults()))
                 .build();

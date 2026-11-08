@@ -420,14 +420,15 @@ rate limiting; no throughput guarantee is established for live traffic.
 #### Pending orders
 
 `POST /api/public/checkout/{reservationId}/orders` creates a pending order
-for an active reservation. Use the store hostname and `Cart-Token` header,
-with a JSON body such as:
+for an active reservation. Use the store hostname, the customer's bearer
+access token, and the `Cart-Token` header, with a JSON body such as:
 
 ```json
-{"customerName":"Ana","customerEmail":"ana@example.com","acceptPartial":false}
+{"acceptPartial":false}
 ```
 
-Name and email are required. If any checkout item was unavailable,
+The order records the authenticated customer's name and email at creation.
+If any checkout item was unavailable,
 `acceptPartial` must explicitly be `true`; only fully reserved items enter the
 order. Otherwise `false` is sufficient. The response is `200` with the order,
 including the checkout price and quantity and a snapshot of product name and
@@ -435,34 +436,67 @@ variant attributes. `total` is the sum of item prices and quantities in BRL;
 it excludes shipping, which has not been implemented. Prices are captured
 from checkout; names and variant attributes are captured at order creation.
 
-There is at most one order per reservation. A repeat with the same normalized
-name, email and `acceptPartial` returns the original order, including after
-its expiration or cancellation. A changed request or an inactive reservation
-without an order returns `409`. No request extends the reservation. The order
+There is at most one order per reservation. A repeat by the same customer with
+the same `acceptPartial` returns the original order, including after its
+expiration or cancellation. A different customer or confirmation value, or
+an inactive reservation without an order, returns `409`. No request extends the reservation. The order
 is `PENDING` only while the reservation is active, becomes `EXPIRED` when the
 deadline passes, and becomes `CANCELLED` when checkout is cancelled. Status is
 derived from the reservation, so expiration and stock release do not require a
 background job. A customer needs a new checkout after expiry.
 
-`GET /api/public/orders/{orderId}` requires the same store hostname and
-`Cart-Token`; `GET /api/orders` and `GET /api/orders/{orderId}` require a
+`GET /api/public/customer/orders` and `GET /api/public/customer/orders/{orderId}`
+require the store hostname and the owner's customer bearer token. The list
+uses the same pagination limits as the merchant list.
+`GET /api/public/orders/{orderId}` and the `Cart-Token` remain available only
+for legacy anonymous orders, which are not linked to an account automatically.
+`GET /api/orders` and `GET /api/orders/{orderId}` require a
 merchant bearer token and are scoped to that merchant's store. The merchant
 list accepts zero-based `page` and `size`, default 20 and maximum 100.
 Responses containing customer information use `Cache-Control: no-store`.
-Customer access currently lasts only as long as the cart token remains valid;
-losing it or cart expiration prevents customer retrieval. The merchant retains
-access. Orders and personal data are retained without automatic deletion;
+For legacy orders, losing the cart token or cart expiration prevents customer
+retrieval. The merchant retains access. The cart token still authorizes checkout
+cancellation even after an order is created, so it remains a sensitive secret.
+Orders and personal data are retained without automatic deletion;
 retention, privacy policy and secure customer recovery require future design.
 
-This block does not implement a customer account, customer login, managed
-contact information or addresses, shipping, order confirmation, payment
-processing or physical stock deduction. Customer profiles and those details
-need future branches. A payment provider (such as PagBank or Mercado Pago)
+This block does not implement managed contact information or addresses,
+shipping, order confirmation, payment processing or physical stock deduction.
+Customer profiles and those details need future branches. A payment provider (such as PagBank or Mercado Pago)
 has not been selected. Payment data handling, provider integration, payment
 expiration, asynchronous confirmation, secure webhooks, idempotency, and
 atomic reservation-to-sale conversion require a separate design. Do not store
 card numbers or security codes in this application. Without those capabilities,
 pending orders cannot be paid or fulfilled.
+
+#### Customer accounts
+
+Each customer account belongs to a single store. The same email may be used
+independently in different stores, while email uniqueness within a store is
+case-insensitive. All customer authentication endpoints resolve the store
+from the hostname and use HTTPS in production:
+
+- `POST /api/public/customer-auth/register`: `name`, `email`, and `password`
+  (12–128 characters); returns `201` or `409` for a duplicate email.
+- `POST /api/public/customer-auth/login`: `email` and `password`; returns an
+  access token and a refresh token.
+- `POST /api/public/customer-auth/refresh`: `refreshToken`; rotates the refresh
+  token atomically. A token cannot be refreshed on another store.
+- `POST /api/public/customer-auth/logout`: `refreshToken`; revokes it. An
+  already-issued access token remains valid until expiration.
+
+Customer access tokens last 15 minutes; refresh tokens last seven days and
+are stored hashed. Customer and merchant tokens have distinct authorization:
+customer tokens cannot access merchant endpoints, and merchant tokens cannot
+act as customer tokens. The cart and checkout may still be started
+anonymously, but creating a new order requires customer login. Existing
+anonymous orders are not associated merely by matching email.
+
+Email verification, password recovery, account management, secure recovery of
+legacy orders, rate limiting, abuse prevention and privacy/retention policies
+remain to be designed before production. Registration currently permits
+unverified email addresses. Do not treat possession of an account as proof
+that its email address is controlled by the account owner.
 
 #### Audit, access, and isolation
 
