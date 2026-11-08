@@ -53,6 +53,14 @@ public class ShippingEstimateController {
                 stores.resolve(request.getServerName()), token, destination.postalCode()));
     }
 
+    @PostMapping("/api/public/checkout/{reservationId}/shipping-estimates")
+    public ResponseEntity<ShippingEstimateService.CheckoutQuote> checkout(HttpServletRequest request,
+            @PathVariable UUID reservationId, @RequestHeader(value = "Cart-Token", required = false) String token,
+            @Valid @RequestBody Destination destination) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(estimates.checkout(
+                stores.resolve(request.getServerName()), token, reservationId, destination.postalCode()));
+    }
+
     @ExceptionHandler(ShippingEstimateService.InvalidItems.class)
     public ResponseEntity<ItemErrors> invalidItems(ShippingEstimateService.InvalidItems exception) {
         return ResponseEntity.status(HttpStatus.CONFLICT).cacheControl(CacheControl.noStore())

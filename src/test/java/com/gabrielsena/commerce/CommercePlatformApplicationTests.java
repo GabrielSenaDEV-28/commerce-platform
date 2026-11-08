@@ -98,6 +98,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.hamcrest.Matchers.hasItem;
@@ -356,6 +357,147 @@ class CommercePlatformApplicationTests {
 		checkoutReservationService.start(store, token);
 		assertEquals("UNAVAILABLE", assertThrows(ShippingEstimateService.InvalidItems.class,
 				() -> service.cart(store, token, "96020360")).items().getFirst().reasons().getFirst());
+	}
+
+	@Test
+	void checkoutShippingEstimatesShouldQuoteOnlyReservedItemsUsingSnapshotPrices() throws Exception {
+		CatalogActor actor = catalogActor();
+		UUID store = catalogStoreResolver.storeFor(actor.id());
+		InventoryFixture fixture = inventoryFixture(actor);
+		ItemType type = itemTypeService.create(actor.id(), new ItemTypeValues("Second type", false, false, null));
+		Product second = productService.create(actor.id(), new ProductRequest(type.getId(), "SKU2", "Second",
+				"Description", BigDecimal.TEN, List.of(new VariantRequest(null, null, null))));
+		UUID secondVariant = jdbcTemplate.queryForObject(
+				"SELECT variant_id FROM catalog_product_variants WHERE product_id = ?", UUID.class, second.getId());
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 2, "Stock", UUID.randomUUID());
+		inventoryService.move(actor.id(), second.getId(), secondVariant, MovementType.ENTRY, 1, "Stock", UUID.randomUUID());
+		productService.updateVariantShipping(actor.id(), fixture.productId(), fixture.variantId(),
+				new VariantShippingRequest(new BigDecimal("0.125"), new BigDecimal("10.25"), BigDecimal.TEN, BigDecimal.TEN));
+		storeShippingSettingsService.update(actor.id(), new StoreShippingSettingsService.Settings(
+				"01001000", "Rua A", "10", null, "Centro", "Sao Paulo", "SP", false, null));
+		String token = shoppingCartService.create(store).token();
+		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 2);
+		shoppingCartService.setQuantity(store, token, second.getId(), secondVariant, 1);
+		inventoryService.move(actor.id(), second.getId(), secondVariant, MovementType.EXIT, 1, "Adjustment", UUID.randomUUID());
+		var reservation = checkoutReservationService.start(store, token);
+		assertEquals(1, reservation.items().stream().filter(CheckoutReservationService.Item::reserved).count());
+		jdbcTemplate.update("UPDATE catalog_products SET price = 99 WHERE store_id = ? AND product_id = ?", store, fixture.productId());
+		var auth = mock(MelhorEnvioOAuthService.class);
+		var provider = mock(MelhorEnvioClient.class);
+		when(auth.accessToken(store)).thenReturn("store-token");
+		when(provider.quote(eq("store-token"), any())).thenReturn(new MelhorEnvioClient.QuoteResult(
+				List.of(new MelhorEnvioClient.ServiceQuote(1, "PAC", new BigDecimal("12.34"), 5)), List.of()));
+		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, auth, provider);
+		MockMvc api = MockMvcBuilders.standaloneSetup(new ShippingEstimateController(
+				new PublicStoreResolver(storeRepository, "localhost"), service)).build();
+		String path = "/api/public/checkout/" + reservation.id() + "/shipping-estimates";
+		api.perform(post(path).header("Cart-Token", token).contentType(APPLICATION_JSON)
+						.content("{\"postalCode\":\"96020360\"}").with(r -> { r.setServerName(storefrontHost(actor)); return r; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.reservationId").value(reservation.id().toString()))
+				.andExpect(jsonPath("$.expiresAt").exists()).andExpect(jsonPath("$.quotes[0].price").value(12.34))
+				.andExpect(r -> assertEquals("no-store", r.getResponse().getHeader("Cache-Control")));
+		ArgumentCaptor<MelhorEnvioClient.QuoteRequest> request = ArgumentCaptor.forClass(MelhorEnvioClient.QuoteRequest.class);
+		verify(provider).quote(eq("store-token"), request.capture());
+		assertEquals("01001000", request.getValue().originPostalCode());
+		assertEquals("96020360", request.getValue().destinationPostalCode());
+		assertEquals(1, request.getValue().products().size());
+		var product = request.getValue().products().getFirst();
+		assertEquals(fixture.variantId().toString(), product.id());
+		assertEquals(2, product.quantity());
+		assertEquals(0, product.unitValue().compareTo(BigDecimal.TEN));
+		assertEquals(0, product.widthCm().compareTo(new BigDecimal("10.25")));
+		assertEquals(reservation, checkoutReservationService.get(store, token));
+	}
+
+	@Test
+	void checkoutShippingEstimatesShouldValidateAccessMeasurementsAndProviderErrors() throws Exception {
+		CatalogActor actor = catalogActor();
+		CatalogActor other = catalogActor();
+		UUID store = catalogStoreResolver.storeFor(actor.id());
+		UUID otherStore = catalogStoreResolver.storeFor(other.id());
+		InventoryFixture fixture = inventoryFixture(actor);
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Stock", UUID.randomUUID());
+		String token = shoppingCartService.create(store).token();
+		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
+		var reservation = checkoutReservationService.start(store, token);
+		var auth = mock(MelhorEnvioOAuthService.class);
+		var provider = mock(MelhorEnvioClient.class);
+		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, auth, provider);
+		String path = "/api/public/checkout/" + reservation.id() + "/shipping-estimates";
+		String host = storefrontHost(actor);
+		String body = "{\"postalCode\":\"96020360\"}";
+		mockMvc.perform(post(path).header("Cart-Token", token).contentType(APPLICATION_JSON).content(body)
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("ITEMS_NOT_QUOTABLE"))
+				.andExpect(jsonPath("$.items[0].reasons[0]").value("MISSING_MEASUREMENTS"));
+		mockMvc.perform(post(path).contentType(APPLICATION_JSON).content(body)
+						.with(r -> { r.setServerName(host); return r; })).andExpect(status().isNotFound());
+		mockMvc.perform(post(path).header("Cart-Token", token).contentType(APPLICATION_JSON)
+						.content("{\"postalCode\":\"96020-360\"}").with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isBadRequest());
+		assertEquals(404, assertThrows(ResponseStatusException.class,
+				() -> service.checkout(otherStore, token, reservation.id(), "96020360")).getStatusCode().value());
+		String otherCart = shoppingCartService.create(store).token();
+		assertEquals(409, assertThrows(ResponseStatusException.class,
+				() -> service.checkout(store, otherCart, reservation.id(), "96020360")).getStatusCode().value());
+		assertEquals(409, assertThrows(ResponseStatusException.class,
+				() -> service.checkout(store, token, UUID.randomUUID(), "96020360")).getStatusCode().value());
+		verify(auth, never()).accessToken(any());
+		verify(provider, never()).quote(any(), any());
+		productService.updateVariantShipping(actor.id(), fixture.productId(), fixture.variantId(),
+				new VariantShippingRequest(BigDecimal.ONE, BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN));
+		assertEquals(409, assertThrows(ResponseStatusException.class,
+				() -> service.checkout(store, token, reservation.id(), "96020360")).getStatusCode().value());
+		storeShippingSettingsService.update(actor.id(), new StoreShippingSettingsService.Settings(
+				"01001000", "Rua A", "10", null, "Centro", "Sao Paulo", "SP", false, null));
+		when(auth.accessToken(store)).thenReturn("store-token");
+		when(provider.quote(eq("store-token"), any())).thenThrow(new MelhorEnvioException(MelhorEnvioException.Reason.UNAVAILABLE));
+		MockMvc api = MockMvcBuilders.standaloneSetup(new ShippingEstimateController(
+				new PublicStoreResolver(storeRepository, "localhost"), service)).build();
+		api.perform(post(path).header("Cart-Token", token).contentType(APPLICATION_JSON).content(body)
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isServiceUnavailable())
+				.andExpect(jsonPath("$.code").value("SHIPPING_TEMPORARILY_UNAVAILABLE"));
+		checkoutReservationService.cancel(store, token, reservation.id());
+		assertEquals(409, assertThrows(ResponseStatusException.class,
+				() -> service.checkout(store, token, reservation.id(), "96020360")).getStatusCode().value());
+	}
+
+	@Test
+	void checkoutShippingEstimatesShouldRejectReservationCancelledOrExpiredDuringProviderCall() {
+		CatalogActor actor = catalogActor();
+		UUID store = catalogStoreResolver.storeFor(actor.id());
+		InventoryFixture fixture = inventoryFixture(actor);
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 1, "Stock", UUID.randomUUID());
+		productService.updateVariantShipping(actor.id(), fixture.productId(), fixture.variantId(),
+				new VariantShippingRequest(BigDecimal.ONE, BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN));
+		storeShippingSettingsService.update(actor.id(), new StoreShippingSettingsService.Settings(
+				"01001000", "Rua A", "10", null, "Centro", "Sao Paulo", "SP", false, null));
+		String token = shoppingCartService.create(store).token();
+		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
+		var auth = mock(MelhorEnvioOAuthService.class);
+		var provider = mock(MelhorEnvioClient.class);
+		when(auth.accessToken(store)).thenReturn("store-token");
+		var service = new ShippingEstimateService(jdbcTemplate, shoppingCartService, auth, provider);
+		var first = checkoutReservationService.start(store, token);
+		when(provider.quote(eq("store-token"), any())).thenAnswer(invocation -> {
+			checkoutReservationService.cancel(store, token, first.id());
+			return new MelhorEnvioClient.QuoteResult(List.of(), List.of());
+		});
+		assertEquals(409, assertThrows(ResponseStatusException.class,
+				() -> service.checkout(store, token, first.id(), "96020360")).getStatusCode().value());
+		var second = checkoutReservationService.start(store, token);
+		doAnswer(invocation -> {
+			jdbcTemplate.update("""
+					UPDATE checkout_reservations SET created_at = clock_timestamp() - INTERVAL '21 minutes',
+					    expires_at = clock_timestamp() - INTERVAL '1 minute' WHERE reservation_id = ?
+					""", second.id());
+			return new MelhorEnvioClient.QuoteResult(List.of(), List.of());
+		}).when(provider).quote(eq("store-token"), any());
+		assertEquals(409, assertThrows(ResponseStatusException.class,
+				() -> service.checkout(store, token, second.id(), "96020360")).getStatusCode().value());
+		assertEquals(409, assertThrows(ResponseStatusException.class,
+				() -> service.checkout(store, token, second.id(), "96020360")).getStatusCode().value());
 	}
 
 	@Test

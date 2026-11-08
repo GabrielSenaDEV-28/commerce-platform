@@ -11,6 +11,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -41,7 +42,10 @@ public class ShippingEstimateService {
     }
     private record Item(UUID productId, UUID variantId, int quantity, BigDecimal price,
                         BigDecimal weight, BigDecimal width, BigDecimal height, BigDecimal length,
-                        boolean active, long stock) { }
+                        boolean available) { }
+    public record CheckoutQuote(UUID reservationId, Instant expiresAt,
+                                List<MelhorEnvioClient.ServiceQuote> quotes,
+                                List<MelhorEnvioClient.UnavailableService> unavailable) { }
 
     private static final String ITEM_COLUMNS = """
             p.product_id, v.variant_id, COALESCE(v.price, p.price) AS price,
@@ -83,12 +87,44 @@ public class ShippingEstimateService {
         return estimate(store, destination, items);
     }
 
+    public CheckoutQuote checkout(UUID store, String token, UUID reservationId, String destination) {
+        UUID cartId = carts.cartId(store, token, false);
+        activeReservation(store, cartId, reservationId);
+        List<Item> items = jdbc.query("""
+                SELECT i.product_id, i.variant_id, i.quantity, i.price,
+                       v.shipping_weight_kg, v.shipping_width_cm, v.shipping_height_cm, v.shipping_length_cm
+                FROM checkout_reservation_items i
+                JOIN checkout_reservations r ON r.store_id = i.store_id AND r.reservation_id = i.reservation_id
+                JOIN catalog_product_variants v ON v.store_id = i.store_id AND v.product_id = i.product_id
+                    AND v.variant_id = i.variant_id
+                WHERE r.store_id = ? AND r.cart_id = ? AND r.reservation_id = ?
+                    AND r.cancelled_at IS NULL AND r.expires_at > clock_timestamp() AND i.reserved
+                ORDER BY i.product_id, i.variant_id
+                """, (rs, row) -> item(rs, rs.getInt("quantity"), true), store, cartId, reservationId);
+        if (items.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Checkout reservation is not active.");
+        }
+        MelhorEnvioClient.QuoteResult result = estimate(store, destination, items);
+        Instant expiresAt = activeReservation(store, cartId, reservationId);
+        return new CheckoutQuote(reservationId, expiresAt, result.quotes(), result.unavailable());
+    }
+
+    private Instant activeReservation(UUID store, UUID cartId, UUID reservationId) {
+        return jdbc.query("""
+                SELECT expires_at FROM checkout_reservations
+                WHERE store_id = ? AND cart_id = ? AND reservation_id = ?
+                    AND cancelled_at IS NULL AND expires_at > clock_timestamp()
+                """, (rs, row) -> rs.getTimestamp(1).toInstant(), store, cartId, reservationId).stream()
+                .findFirst().orElseThrow(() ->
+                        new ResponseStatusException(HttpStatus.CONFLICT, "Checkout reservation is not active."));
+    }
+
     private MelhorEnvioClient.QuoteResult estimate(UUID store, String destination, List<Item> items) {
         List<ItemIssue> issues = new ArrayList<>();
         List<MelhorEnvioClient.Product> products = new ArrayList<>();
         for (Item item : items) {
             List<String> reasons = new ArrayList<>();
-            if (!item.active() || item.stock() < item.quantity()) {
+            if (!item.available()) {
                 reasons.add("UNAVAILABLE");
             }
             if (item.weight() == null || item.width() == null || item.height() == null || item.length() == null) {
@@ -112,9 +148,13 @@ public class ShippingEstimateService {
     }
 
     private static Item item(ResultSet rs, int quantity) throws SQLException {
+        return item(rs, quantity, rs.getBoolean("active") && rs.getLong("stock") >= quantity);
+    }
+
+    private static Item item(ResultSet rs, int quantity, boolean available) throws SQLException {
         return new Item(rs.getObject("product_id", UUID.class), rs.getObject("variant_id", UUID.class),
                 quantity, rs.getBigDecimal("price"), rs.getBigDecimal("shipping_weight_kg"),
                 rs.getBigDecimal("shipping_width_cm"), rs.getBigDecimal("shipping_height_cm"),
-                rs.getBigDecimal("shipping_length_cm"), rs.getBoolean("active"), rs.getLong("stock"));
+                rs.getBigDecimal("shipping_length_cm"), available);
     }
 }
