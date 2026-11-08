@@ -10,6 +10,8 @@ import com.gabrielsena.commerce.auth.RefreshTokenRepository;
 import com.gabrielsena.commerce.auth.InvalidRefreshTokenException;
 import com.gabrielsena.commerce.auth.application.AuthenticateMerchant;
 import com.gabrielsena.commerce.auth.application.AuthenticationRateLimiter;
+import com.gabrielsena.commerce.security.PublicApiRateLimiter;
+import com.gabrielsena.commerce.security.RateLimitCounter;
 import com.gabrielsena.commerce.auth.application.RefreshAuthentication;
 import com.gabrielsena.commerce.auth.application.RegisterMerchant;
 import com.gabrielsena.commerce.auth.application.RegisterMerchantCommand;
@@ -225,6 +227,10 @@ class CommercePlatformApplicationTests {
 				WHERE client_address IN ('127.0.0.1', '198.51.100.11', '198.51.100.12',
 				                         '198.51.100.13', '198.51.100.14')
 				""");
+		jdbcTemplate.update("""
+				DELETE FROM public_api_rate_limits WHERE client_address IN
+				    ('127.0.0.1', '198.51.100.21', '198.51.100.22', '198.51.100.23')
+				""");
 	}
 
 	private static PostgreSQLContainer<?> startPostgresContainerIfNeeded() {
@@ -289,6 +295,91 @@ class CommercePlatformApplicationTests {
 	}
 
 	@Test
+	void publicRateLimitsShouldShareCotasAndProtectEachEntryPoint() throws Exception {
+		CatalogActor actor = catalogActor();
+		String ip = "198.51.100.21";
+		String host = storefrontHost(actor);
+		for (int i = 0; i < 20; i++) {
+			mockMvc.perform(post("/api/public/cart").with(r -> { r.setRemoteAddr(ip); r.setServerName(host); return r; }))
+					.andExpect(status().isCreated());
+		}
+		mockMvc.perform(post("/api/public/cart").header("X-Forwarded-For", "203.0.113.1")
+						.with(r -> { r.setRemoteAddr(ip); r.setServerName(host); return r; }))
+				.andExpect(status().isTooManyRequests()).andExpect(jsonPath("$.code").value("PUBLIC_RATE_LIMITED"))
+				.andExpect(r -> assertTrue(Integer.parseInt(r.getResponse().getHeader("Retry-After")) > 0))
+				.andExpect(r -> assertEquals("no-store", r.getResponse().getHeader("Cache-Control")));
+		String[] paths = {
+				"/api/public/cart/shipping-estimates",
+				"/api/public/checkout/" + UUID.randomUUID() + "/shipping-estimates",
+				"/api/public/catalog/products/" + UUID.randomUUID() + "/variants/" + UUID.randomUUID() + "/shipping-estimates"
+		};
+		for (int i = 0; i < 60; i++) {
+			mockMvc.perform(post(paths[i % 3]).contentType(APPLICATION_JSON).content("{}")
+							.with(r -> { r.setRemoteAddr(ip); r.setServerName(host); return r; }))
+					.andExpect(status().isBadRequest());
+		}
+		for (String path : paths) {
+			mockMvc.perform(post(path).contentType(APPLICATION_JSON).content("{}")
+							.with(r -> { r.setRemoteAddr(ip); r.setServerName("another.localhost"); return r; }))
+					.andExpect(status().isTooManyRequests());
+		}
+		String orderPath = "/api/public/checkout/" + UUID.randomUUID() + "/orders";
+		for (int i = 0; i < 30; i++) {
+			mockMvc.perform(post(orderPath).header("Authorization", "Bearer " + actor.token())
+							.contentType(APPLICATION_JSON).content("{}")
+							.with(r -> { r.setRemoteAddr(ip); r.setServerName(host); return r; }))
+					.andExpect(status().isBadRequest());
+		}
+		mockMvc.perform(post(orderPath).header("Authorization", "Bearer " + actor.token())
+						.contentType(APPLICATION_JSON).content("{}")
+						.with(r -> { r.setRemoteAddr(ip); r.setServerName(host); return r; }))
+				.andExpect(status().isTooManyRequests());
+		mockMvc.perform(get("/api/public/cart").with(r -> { r.setRemoteAddr(ip); r.setServerName(host); return r; }))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(post("/api/public/cart").with(r -> { r.setRemoteAddr("198.51.100.22"); r.setServerName(host); return r; }))
+				.andExpect(status().isCreated());
+		jdbcTemplate.update("""
+				UPDATE public_api_rate_limits SET window_started_at = clock_timestamp() - INTERVAL '16 minutes'
+				WHERE client_address = ? AND category = 'CART_CREATE'
+				""", ip);
+		mockMvc.perform(post("/api/public/cart").with(r -> { r.setRemoteAddr(ip); r.setServerName(host); return r; }))
+				.andExpect(status().isCreated());
+	}
+
+	@Test
+	void publicRateLimitsShouldBeAtomicAndCleanExpiredRows() throws Exception {
+		var counter = new RateLimitCounter(jdbcTemplate);
+		var first = new PublicApiRateLimiter(counter, 3, 3, 3, 900);
+		var second = new PublicApiRateLimiter(new RateLimitCounter(jdbcTemplate), 3, 3, 3, 900);
+		String ip = "198.51.100.23";
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(8);
+		try {
+			List<Future<RateLimitCounter.Decision>> calls = new java.util.ArrayList<>();
+			for (int i = 0; i < 8; i++) {
+				var limiter = i % 2 == 0 ? first : second;
+				calls.add(executor.submit(() -> {
+					start.await();
+					return limiter.check(ip, PublicApiRateLimiter.Category.SHIPPING_QUOTE);
+				}));
+			}
+			start.countDown();
+			int allowed = 0;
+			for (var call : calls) if (call.get(30, TimeUnit.SECONDS).allowed()) allowed++;
+			assertEquals(3, allowed);
+			jdbcTemplate.update("""
+					UPDATE public_api_rate_limits SET window_started_at = clock_timestamp() - INTERVAL '16 minutes'
+					WHERE client_address = ?
+					""", ip);
+			first.cleanup();
+			assertEquals(0, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM public_api_rate_limits WHERE client_address = ?",
+					Integer.class, ip));
+		} finally {
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
 	void authenticationRateLimitShouldShareCategoriesAcrossTenantsAndIgnoreForwardedHeaders() throws Exception {
 		String ip = "198.51.100.11";
 		for (int i = 0; i < 10; i++) {
@@ -319,8 +410,8 @@ class CommercePlatformApplicationTests {
 
 	@Test
 	void authenticationRateLimitShouldEnforceAtomicSharedLimitAndCleanup() throws Exception {
-		var first = new AuthenticationRateLimiter(jdbcTemplate, 3, 3, 3, 900);
-		var second = new AuthenticationRateLimiter(jdbcTemplate, 3, 3, 3, 900);
+		var first = new AuthenticationRateLimiter(new RateLimitCounter(jdbcTemplate), 3, 3, 3, 900);
+		var second = new AuthenticationRateLimiter(new RateLimitCounter(jdbcTemplate), 3, 3, 3, 900);
 		String address = "198.51.100.13";
 		CountDownLatch start = new CountDownLatch(1);
 		ExecutorService executor = Executors.newFixedThreadPool(8);
