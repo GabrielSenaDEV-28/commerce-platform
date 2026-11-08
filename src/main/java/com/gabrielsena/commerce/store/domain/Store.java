@@ -1,16 +1,43 @@
 package com.gabrielsena.commerce.store.domain;
 
+import com.gabrielsena.commerce.store.persistence.SubdomainAttributeConverter;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.Getter;
 
 import java.util.UUID;
 
+@Entity
+@Table(
+        name = "stores",
+        uniqueConstraints = {
+                @UniqueConstraint(name = "uk_stores_merchant", columnNames = "merchant_id"),
+                @UniqueConstraint(name = "uk_stores_subdomain", columnNames = "subdomain")
+        }
+)
 @Getter
 public class Store {
 
-    private final UUID id;
-    private final UUID merchantId;
-    private final String name;
-    private final Subdomain subdomain;
+    @Id
+    @Column(name = "store_id", nullable = false)
+    private UUID id;
+
+    @Column(name = "merchant_id", nullable = false)
+    private UUID merchantId;
+
+    @Column(nullable = false, columnDefinition = "text")
+    private String name;
+
+    @Convert(converter = SubdomainAttributeConverter.class)
+    @Column(nullable = false, length = 63)
+    private Subdomain subdomain;
+
+    protected Store() {
+    }
 
     private Store(
             UUID id,
@@ -18,8 +45,7 @@ public class Store {
             String name,
             Subdomain subdomain
     ) {
-
-        if(id == null) {
+        if (id == null) {
             throw new IllegalArgumentException("Store id must not be null");
         }
 
@@ -42,7 +68,6 @@ public class Store {
     }
 
     public static Store create(UUID merchantId, String name, Subdomain subdomain) {
-
         return new Store(
                 UUID.randomUUID(),
                 merchantId,
@@ -50,5 +75,4 @@ public class Store {
                 subdomain
         );
     }
-
 }

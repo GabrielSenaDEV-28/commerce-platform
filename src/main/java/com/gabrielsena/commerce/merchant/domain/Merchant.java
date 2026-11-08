@@ -1,14 +1,27 @@
 package com.gabrielsena.commerce.merchant.domain;
 
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
 import lombok.Getter;
 
 import java.util.UUID;
 
+@Entity
+@Table(name = "merchants")
 @Getter
 public class Merchant {
 
-    private final UUID id;
-    private final String name;
+    @Id
+    @Column(name = "merchant_id", nullable = false)
+    private UUID id;
+
+    @Column(nullable = false, columnDefinition = "text")
+    private String name;
+
+    protected Merchant() {
+    }
 
     private Merchant(UUID id, String name) {
         if (id == null) {
@@ -24,6 +37,6 @@ public class Merchant {
 
     public static Merchant create(String name) {
 
-        return new Merchant(UUID.randomUUID(), name );
+        return new Merchant(UUID.randomUUID(), name);
     }
 }

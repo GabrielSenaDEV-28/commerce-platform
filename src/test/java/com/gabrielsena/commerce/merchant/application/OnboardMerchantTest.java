@@ -6,9 +6,11 @@ import com.gabrielsena.commerce.store.StoreRepository;
 import com.gabrielsena.commerce.store.SubdomainAlreadyInUseException;
 import com.gabrielsena.commerce.store.domain.Store;
 import com.gabrielsena.commerce.store.domain.Subdomain;
+import org.hibernate.exception.ConstraintViolationException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -49,7 +51,27 @@ public class OnboardMerchantTest {
         );
 
         verifyNoInteractions(merchantRepository);
-        verify(storeRepository, never()).save(any(Store.class));
+        verify(storeRepository, never()).saveAndFlush(any(Store.class));
+    }
+
+    @Test
+    void shouldTranslateDatabaseSubdomainCollisionToBusinessException() {
+        OnboardMerchantCommand command = new OnboardMerchantCommand(
+                "Urban Store LTDA",
+                "Urban Store",
+                "urban-store"
+        );
+        ConstraintViolationException constraintViolation = mock(ConstraintViolationException.class);
+        when(constraintViolation.getConstraintName()).thenReturn("uk_stores_subdomain");
+        when(storeRepository.existsBySubdomain(Subdomain.of(command.subdomain()))).thenReturn(false);
+        when(storeRepository.saveAndFlush(any(Store.class))).thenThrow(
+                new DataIntegrityViolationException("Duplicate subdomain", constraintViolation)
+        );
+
+        assertThrows(
+                SubdomainAlreadyInUseException.class,
+                () -> onboardMerchant.execute(command)
+        );
     }
 
     @Test
@@ -80,7 +102,7 @@ public class OnboardMerchantTest {
         ArgumentCaptor<Store> storeCaptor = ArgumentCaptor.forClass(Store.class);
 
         verify(merchantRepository).save(merchantCaptor.capture());
-        verify(storeRepository).save(storeCaptor.capture());
+        verify(storeRepository).saveAndFlush(storeCaptor.capture());
 
         Merchant savedMerchant = merchantCaptor.getValue();
         Store savedStore = storeCaptor.getValue();
@@ -109,6 +131,6 @@ public class OnboardMerchantTest {
         );
 
         verifyNoInteractions(merchantRepository);
-        verify(storeRepository, never()).save(any(Store.class));
+        verify(storeRepository, never()).saveAndFlush(any(Store.class));
     }
 }

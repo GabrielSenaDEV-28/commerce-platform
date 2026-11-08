@@ -33,6 +33,19 @@ public class SubdomainTest {
     }
 
     @Test
+    public void shouldRejectSubdomainLongerThanDnsLabelLimit() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> Subdomain.of("a".repeat(64))
+        );
+    }
+
+    @Test
+    public void shouldAllowSubdomainAtDnsLabelLimit() {
+        assertEquals(63, Subdomain.of("a".repeat(63)).getValue().length());
+    }
+
+    @Test
     public void shouldNormalizeSubdomainToLowerCase() {
         Subdomain subdomain = Subdomain.of("URBAN-STORE");
 

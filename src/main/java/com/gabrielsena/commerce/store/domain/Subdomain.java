@@ -23,7 +23,8 @@ public final class Subdomain {
 
         String normalized = value.toLowerCase(Locale.ROOT);
 
-        if (!normalized.matches("^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")) {
+        if (normalized.length() > 63
+                || !normalized.matches("^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")) {
             throw new IllegalArgumentException("Invalid subdomain format");
         }
 

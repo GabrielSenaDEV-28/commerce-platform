@@ -1,8 +1,9 @@
 package com.gabrielsena.commerce.merchant;
 
 import com.gabrielsena.commerce.merchant.domain.Merchant;
+import org.springframework.data.jpa.repository.JpaRepository;
 
-public interface MerchantRepository {
+import java.util.UUID;
 
-    Merchant save(Merchant merchant);
+public interface MerchantRepository extends JpaRepository<Merchant, UUID> {
 }
