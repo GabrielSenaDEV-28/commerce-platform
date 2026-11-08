@@ -1,6 +1,5 @@
 package com.gabrielsena.commerce.store.domain;
 
-import com.gabrielsena.commerce.merchant.domain.Merchant;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullSource;

@@ -1,4 +1,4 @@
-package com.gabrielsena.commerce.merchant.application.port.out;
+package com.gabrielsena.commerce.merchant;
 
 import com.gabrielsena.commerce.merchant.domain.Merchant;
 

@@ -1,4 +1,4 @@
-package com.gabrielsena.commerce.store.application.port.out;
+package com.gabrielsena.commerce.store;
 
 import com.gabrielsena.commerce.store.domain.Store;
 import com.gabrielsena.commerce.store.domain.Subdomain;

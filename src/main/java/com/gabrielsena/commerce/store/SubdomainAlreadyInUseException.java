@@ -1,4 +1,4 @@
-package com.gabrielsena.commerce.store.application.exception;
+package com.gabrielsena.commerce.store;
 
 public class SubdomainAlreadyInUseException extends RuntimeException {
 

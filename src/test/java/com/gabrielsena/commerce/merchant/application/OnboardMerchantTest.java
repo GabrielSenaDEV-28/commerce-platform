@@ -1,9 +1,9 @@
 package com.gabrielsena.commerce.merchant.application;
 
-import com.gabrielsena.commerce.merchant.application.port.out.MerchantRepository;
+import com.gabrielsena.commerce.merchant.MerchantRepository;
 import com.gabrielsena.commerce.merchant.domain.Merchant;
-import com.gabrielsena.commerce.store.application.exception.SubdomainAlreadyInUseException;
-import com.gabrielsena.commerce.store.application.port.out.StoreRepository;
+import com.gabrielsena.commerce.store.StoreRepository;
+import com.gabrielsena.commerce.store.SubdomainAlreadyInUseException;
 import com.gabrielsena.commerce.store.domain.Store;
 import com.gabrielsena.commerce.store.domain.Subdomain;
 import org.junit.jupiter.api.BeforeEach;
