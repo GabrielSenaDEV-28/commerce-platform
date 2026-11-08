@@ -115,8 +115,27 @@ of this version. The access account is separate from the Merchant profile so a
 future provider identity can be linked without treating provider email as its
 stable identifier.
 
-Registration and authentication endpoints are public. They can be abused;
-production exposure requires rate limiting and an abuse-prevention decision.
+Registration, login and refresh are rate-limited per direct client IP and
+category across all stores and application instances using PostgreSQL. The
+default fixed window is 15 minutes from the first request: 10 registrations,
+20 logins, and 60 refreshes. Both successful and unsuccessful requests count.
+Merchant and customer endpoints share each category's quota; users behind the
+same IP share it too. Logout is not limited. Exceeded requests return `429`,
+`{"code":"AUTH_RATE_LIMITED"}`, `Retry-After` in seconds and `Cache-Control:
+no-store`. If the rate-limit database is unavailable, protected requests fail
+closed with `503` and `AUTH_RATE_LIMIT_UNAVAILABLE`.
+
+Configure `AUTH_RATE_LIMIT_REGISTER`, `AUTH_RATE_LIMIT_LOGIN`,
+`AUTH_RATE_LIMIT_REFRESH` and `AUTH_RATE_LIMIT_WINDOW_SECONDS` consistently on
+every instance; all values must be positive, and the window must not exceed
+86400 seconds. Expired IP records are removed in batches by a scheduled job.
+IP addresses are temporarily stored in the database; account data and tokens
+are not used as keys. The application uses the direct connection address and
+ignores forwarded IP headers. A reverse proxy will therefore make clients
+share the proxy's limit unless trusted client-IP handling is designed and
+configured at the network boundary. Never trust headers supplied directly by
+clients. Limits are not protection against distributed attacks and may require
+tuning and additional edge-level abuse prevention before production.
 
 ### Catalog and planned inventory management
 
@@ -490,7 +509,7 @@ moments. Stock and prices are informational; checkout revalidates them, and
 availability is not guaranteed until a reservation succeeds. Administrative
 APIs, history and actor details remain private.
 
-The public API has no rate limiting. Production exposure requires an
+The public catalog API has no rate limiting. Production exposure requires an
 abuse-prevention and traffic-limiting decision. The storefront UI, product
 checkout screens are not implemented.
 
@@ -713,7 +732,7 @@ anonymously, but creating a new order requires customer login. Existing
 anonymous orders are not associated merely by matching email.
 
 Email verification, password recovery, account management, secure recovery of
-legacy orders, rate limiting, abuse prevention and privacy/retention policies
+legacy orders, broader abuse prevention and privacy/retention policies
 remain to be designed before production. Registration currently permits
 unverified email addresses. Do not treat possession of an account as proof
 that its email address is controlled by the account owner.
