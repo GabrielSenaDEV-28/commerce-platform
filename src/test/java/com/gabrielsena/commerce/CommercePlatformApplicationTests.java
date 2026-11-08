@@ -26,6 +26,7 @@ import com.gabrielsena.commerce.catalog.domain.ItemType;
 import com.gabrielsena.commerce.catalog.domain.ItemTypeValues;
 import com.gabrielsena.commerce.catalog.domain.Product;
 import com.gabrielsena.commerce.catalog.domain.SizeFormat;
+import com.gabrielsena.commerce.cart.application.ShoppingCartService;
 import com.gabrielsena.commerce.inventory.application.InventoryService;
 import com.gabrielsena.commerce.inventory.application.InventoryService.MovementType;
 import com.gabrielsena.commerce.store.StoreRepository;
@@ -124,6 +125,9 @@ class CommercePlatformApplicationTests {
 
 	@Autowired
 	private InventoryService inventoryService;
+
+	@Autowired
+	private ShoppingCartService shoppingCartService;
 
 	@Autowired
 	private JwtEncoder jwtEncoder;
@@ -825,6 +829,165 @@ class CommercePlatformApplicationTests {
 	private String storefrontHost(CatalogActor actor) {
 		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
 		return storeRepository.findByMerchantId(merchantId).orElseThrow().getSubdomain().getValue() + ".localhost";
+	}
+
+	@Test
+	void anonymousCartShouldValidateStockAndRetainUnavailableItems() throws Exception {
+		CatalogActor actor = catalogActor();
+		String host = storefrontHost(actor);
+		InventoryFixture fixture = inventoryFixture(actor);
+		String path = "/api/public/cart";
+		String item = path + "/items/" + fixture.productId() + "/" + fixture.variantId();
+		String created = mockMvc.perform(post(path).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isCreated()).andExpect(jsonPath("$.expiresAt").isNotEmpty())
+				.andExpect(result -> assertEquals("no-store", result.getResponse().getHeader("Cache-Control")))
+				.andReturn().getResponse().getContentAsString();
+		String token = JsonPath.read(created, "$.token");
+		assertEquals(43, token.length());
+		assertEquals(1, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM shopping_carts WHERE token_hash = ?",
+				Integer.class, TokenService.hashToken(token)));
+		mockMvc.perform(get(path).header("Cart-Token", token).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.items.length()").value(0));
+		mockMvc.perform(put(item).header("Cart-Token", token).contentType(APPLICATION_JSON).content("{\"quantity\":1}")
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isConflict());
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 5, "Delivery", UUID.randomUUID());
+		mockMvc.perform(put(item).header("Cart-Token", token).contentType(APPLICATION_JSON).content("{\"quantity\":3}")
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.items[0].quantity").value(3))
+				.andExpect(jsonPath("$.items[0].stockQuantity").value(5))
+				.andExpect(jsonPath("$.items[0].available").value(true))
+				.andExpect(jsonPath("$.items[0].price").value(10));
+		mockMvc.perform(put(item).header("Cart-Token", token).contentType(APPLICATION_JSON).content("{\"quantity\":3}")
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.items[0].quantity").value(3));
+		String anotherCart = mockMvc.perform(post(path).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+		String anotherToken = JsonPath.read(anotherCart, "$.token");
+		mockMvc.perform(put(item).header("Cart-Token", anotherToken).contentType(APPLICATION_JSON).content("{\"quantity\":5}")
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.items[0].quantity").value(5));
+		assertEquals(5, inventoryService.balance(actor.id(), fixture.productId(), fixture.variantId()).quantity());
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.EXIT, 3, "Adjustment", UUID.randomUUID());
+		mockMvc.perform(get(path).header("Cart-Token", token).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.items[0].quantity").value(3))
+				.andExpect(jsonPath("$.items[0].stockQuantity").value(2))
+				.andExpect(jsonPath("$.items[0].available").value(false));
+		mockMvc.perform(put(item).header("Cart-Token", token).contentType(APPLICATION_JSON).content("{\"quantity\":2}")
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.items[0].available").value(true));
+		productService.updateVariantPrice(actor.id(), fixture.productId(), fixture.variantId(), new BigDecimal("12.50"));
+		productService.setVariantActive(actor.id(), fixture.productId(), fixture.variantId(), false);
+		mockMvc.perform(get(path).header("Cart-Token", token).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.items[0].price").value(12.50))
+				.andExpect(jsonPath("$.items[0].available").value(false));
+		mockMvc.perform(delete(item).header("Cart-Token", token).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.items.length()").value(0));
+		mockMvc.perform(delete(item).header("Cart-Token", token).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.items.length()").value(0));
+	}
+
+	@Test
+	void anonymousCartShouldEnforceTenantTokenExpiryAndInputValidation() throws Exception {
+		CatalogActor actor = catalogActor();
+		CatalogActor other = catalogActor();
+		String host = storefrontHost(actor);
+		InventoryFixture fixture = inventoryFixture(actor);
+		InventoryFixture foreign = inventoryFixture(other);
+		String path = "/api/public/cart";
+		String created = mockMvc.perform(post(path).with(request -> { request.setServerName(host); return request; }))
+				.andReturn().getResponse().getContentAsString();
+		String token = JsonPath.read(created, "$.token");
+		String item = path + "/items/" + fixture.productId() + "/" + fixture.variantId();
+		mockMvc.perform(get(path).header("Cart-Token", token)
+						.with(request -> { request.setServerName(storefrontHost(other)); return request; }))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get(path).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get(path).header("Cart-Token", "invalid").with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(put(path + "/items/{product}/{variant}", foreign.productId(), foreign.variantId())
+						.header("Cart-Token", token).contentType(APPLICATION_JSON).content("{\"quantity\":1}")
+						.with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isNotFound());
+		for (String quantity : List.of("0", "-1", "1.5", "2147483648", "null")) {
+			mockMvc.perform(put(item).header("Cart-Token", token).contentType(APPLICATION_JSON)
+							.content("{\"quantity\":" + quantity + "}")
+							.with(request -> { request.setServerName(host); return request; }))
+					.andExpect(status().isBadRequest());
+		}
+		mockMvc.perform(post(path).header("X-Forwarded-Host", host)
+						.with(request -> { request.setServerName("evil.example"); return request; }))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(delete(path).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isUnauthorized());
+		jdbcTemplate.update("UPDATE shopping_carts SET expires_at = clock_timestamp() - INTERVAL '1 second' WHERE token_hash = ?",
+				TokenService.hashToken(token));
+		mockMvc.perform(get(path).header("Cart-Token", token).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(delete(item).header("Cart-Token", token).with(request -> { request.setServerName(host); return request; }))
+				.andExpect(status().isNotFound());
+	}
+
+	@Test
+	void anonymousCartShouldRenewOnlyAfterActualChanges() {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
+		UUID store = storeRepository.findByMerchantId(merchantId).orElseThrow().getId();
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 5, "Delivery", UUID.randomUUID());
+		var created = shoppingCartService.create(store);
+		jdbcTemplate.update("UPDATE shopping_carts SET expires_at = clock_timestamp() + INTERVAL '1 day' WHERE token_hash = ?",
+				TokenService.hashToken(created.token()));
+		Instant oldExpiry = shoppingCartService.get(store, created.token()).expiresAt();
+		assertEquals(oldExpiry, shoppingCartService.remove(store, created.token(), fixture.productId(), fixture.variantId()).expiresAt());
+		Instant renewed = shoppingCartService.setQuantity(store, created.token(), fixture.productId(), fixture.variantId(), 1).expiresAt();
+		assertTrue(renewed.isAfter(oldExpiry.plusSeconds(28 * 86400L)));
+		assertEquals(renewed, shoppingCartService.setQuantity(store, created.token(), fixture.productId(), fixture.variantId(), 1).expiresAt());
+	}
+
+	@Test
+	void anonymousCartShouldEnforceItemLimitUnderConcurrentChanges() throws Exception {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		UUID merchantId = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
+		UUID store = storeRepository.findByMerchantId(merchantId).orElseThrow().getId();
+		var cart = shoppingCartService.create(store);
+		UUID cartId = jdbcTemplate.queryForObject("SELECT cart_id FROM shopping_carts WHERE token_hash = ?",
+				UUID.class, TokenService.hashToken(cart.token()));
+		jdbcTemplate.update("""
+				INSERT INTO catalog_product_variants
+				    (variant_id, store_id, product_id, color, size, price, active, created_at, created_by, updated_at, updated_by)
+				SELECT gen_random_uuid(), ?, ?, 'test-' || n, NULL, NULL, true, clock_timestamp(), ?,
+				       clock_timestamp(), ?
+				FROM generate_series(1, 101) AS n
+				""", store, fixture.productId(), actor.id(), actor.id());
+		List<UUID> variants = jdbcTemplate.queryForList("""
+				SELECT variant_id FROM catalog_product_variants WHERE product_id = ? AND color LIKE 'test-%'
+				ORDER BY color
+				""", UUID.class, fixture.productId());
+		for (UUID variant : variants) {
+			jdbcTemplate.update("INSERT INTO inventory_balances (variant_id, store_id, product_id, quantity, version) VALUES (?, ?, ?, 1, 0)",
+					variant, store, fixture.productId());
+		}
+		for (UUID variant : variants.subList(0, 99)) {
+			jdbcTemplate.update("INSERT INTO shopping_cart_items (store_id, cart_id, product_id, variant_id, quantity) VALUES (?, ?, ?, ?, 1)",
+					store, cartId, fixture.productId(), variant);
+		}
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		try {
+			List<Future<?>> results = List.of(
+					executor.submit(() -> { start.await(); return shoppingCartService.setQuantity(
+							store, cart.token(), fixture.productId(), variants.get(99), 1); }),
+					executor.submit(() -> { start.await(); return shoppingCartService.setQuantity(
+							store, cart.token(), fixture.productId(), variants.get(100), 1); }));
+			start.countDown();
+			assertOneSuccessOneConflict(results);
+			assertEquals(100, shoppingCartService.get(store, cart.token()).items().size());
+		} finally {
+			executor.shutdownNow();
+		}
 	}
 
 	@Test

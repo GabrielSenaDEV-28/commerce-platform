@@ -337,7 +337,62 @@ implemented. Administrative APIs, history and actor details remain private.
 
 The public API has no rate limiting. Production exposure requires an
 abuse-prevention and traffic-limiting decision. The storefront UI, product
-photos, cart and checkout are not implemented.
+photos and checkout are not implemented.
+
+#### Anonymous shopping cart API
+
+The public cart uses the same hostname-based store resolution as the catalog.
+`POST /api/public/cart` creates an empty cart and returns a random `token` and
+`expiresAt`. The token is returned only at creation; the client must keep it
+securely on the device and send it in the `Cart-Token` header for subsequent
+requests. It grants access to the cart, must not be put in a URL or logs, and
+cannot be recovered if lost. Only its hash is stored by the server. Responses
+are marked `Cache-Control: no-store`; a future storefront must implement
+secure client-side handling and use HTTPS in production.
+
+`GET /api/public/cart` returns the cart and its items. `PUT
+/api/public/cart/items/{productId}/{variantId}` sets the desired quantity
+using `{"quantity":2}`; retrying the same request does not add the quantity
+again. `DELETE` on the same item path removes it, and deleting an absent item
+is harmless. Each cart holds at most 100 distinct variants. Quantities must be
+positive whole numbers within the current physical stock; unavailable or
+insufficient stock returns `409`, while an unknown variant or cart returns
+`404`. A cart token cannot be used with another store's hostname. The cart
+expires 30 days after creation or its last actual change; reads, unsuccessful
+requests and unchanged retries do not renew it. Expired carts cannot be
+accessed; automatic deletion of expired records is not yet implemented.
+
+Items remain visible when product or variant status or stock changes. Each
+item shows the current effective `price`, requested `quantity`, physical
+`stockQuantity` and `available` (active and enough physical stock for the
+requested quantity). Prices and stock can change immediately after a response;
+the cart does not reserve stock or guarantee a purchase. It contains no
+customer data. Abuse prevention and rate limiting remain necessary before
+production exposure, including protection against excessive cart creation.
+
+#### Planned live sales and checkout reservations
+
+Merchants may share storefront links during live broadcasts, with an expected
+initial scenario of 50–100 people concurrently viewing the same items. The
+future storefront should update stock visibility in near real time; WebSockets
+are a possible approach, not yet selected or implemented. Client displays
+may lag and must never be treated as an inventory guarantee.
+
+Adding an item to the cart does not reserve it. On choosing to buy, the future
+checkout must atomically validate and reserve available stock on the server
+before collecting customer and payment details. The intended initial
+reservation duration is 20 minutes, with configurability to be considered
+later. Competing checkout requests must not oversell: a request that cannot
+reserve must receive an explicit unavailable result. The backend must enforce
+expiration and release stock independently of the browser and revalidate
+reservation state before order/payment confirmation.
+
+The future checkout UI should show an expiration warning with an OK button
+when the time runs out; pressing it refreshes the page and returns the
+customer to the item page. These are planned behaviors, not implemented
+reservations, payment processing, WebSockets or UI. Multi-item checkout
+navigation, payment-pending expiry and reservation recovery still need design
+before implementation.
 
 #### Audit, access, and isolation
 
