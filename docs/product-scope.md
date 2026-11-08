@@ -87,6 +87,17 @@ browse the catalog, purchase products, and follow the lifecycle of their orders.
 14. After confirmation, the merchant fulfills the order and the customer can
     follow its delivery lifecycle.
 
+### Merchant onboarding API (MVP)
+
+Merchant self-registration is available through the public
+`POST /api/merchants` endpoint. It creates a merchant and its initial store,
+returning `201 Created`; invalid input returns `400 Bad Request`, and an
+already-used subdomain returns `409 Conflict`.
+
+This endpoint does not require authentication in the initial version.
+Unauthenticated public access can be abused to create unwanted registrations;
+production exposure requires a separate abuse-prevention decision.
+
 ## 5. Initial Scope
 
 The first version will focus on the minimum end-to-end commerce flow required
