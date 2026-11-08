@@ -1,5 +1,6 @@
 package com.gabrielsena.commerce.store.domain;
 
+import com.gabrielsena.commerce.store.InvalidSubdomainException;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 
@@ -18,14 +19,14 @@ public final class Subdomain {
     public static Subdomain of(String value) {
 
         if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException("Subdomain must not be  blank");
+            throw new InvalidSubdomainException("Subdomain must not be blank");
         }
 
         String normalized = value.toLowerCase(Locale.ROOT);
 
         if (normalized.length() > 63
                 || !normalized.matches("^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")) {
-            throw new IllegalArgumentException("Invalid subdomain format");
+            throw new InvalidSubdomainException("Invalid subdomain format");
         }
 
         return new Subdomain(normalized);

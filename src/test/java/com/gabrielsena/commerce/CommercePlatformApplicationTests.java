@@ -12,11 +12,13 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 import java.net.URI;
@@ -33,8 +35,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.springframework.http.MediaType.APPLICATION_JSON;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest
+@AutoConfigureMockMvc
 class CommercePlatformApplicationTests {
 
 	private static final String TEST_DATABASE_URL = validateTestDatabaseUrl(System.getenv("TEST_DATABASE_URL"));
@@ -51,6 +59,9 @@ class CommercePlatformApplicationTests {
 
 	@Autowired
 	private JdbcTemplate jdbcTemplate;
+
+	@Autowired
+	private MockMvc mockMvc;
 
 	private static PostgreSQLContainer<?> startPostgresContainerIfNeeded() {
 		if (TEST_DATABASE_URL != null) {
@@ -205,6 +216,103 @@ class CommercePlatformApplicationTests {
 						Store.create(secondMerchant.getId(), "Second Store", Subdomain.of(subdomain))
 				)
 		);
+	}
+
+	@Test
+	void shouldCreateMerchantAndStoreThroughPublicApi() throws Exception {
+		String subdomain = uniqueSubdomain();
+
+		mockMvc.perform(post("/api/merchants")
+						.contentType(APPLICATION_JSON)
+						.content("""
+								{
+								  "merchantName": "Urban Store LTDA",
+								  "storeName": "Urban Store",
+								  "subdomain": "%s"
+								}
+								""".formatted(subdomain)))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.merchantId").isNotEmpty())
+				.andExpect(jsonPath("$.storeId").isNotEmpty())
+				.andExpect(jsonPath("$.merchantName").value("Urban Store LTDA"))
+				.andExpect(jsonPath("$.storeName").value("Urban Store"))
+				.andExpect(jsonPath("$.subdomain").value(subdomain));
+
+		assertEquals(1, jdbcTemplate.queryForObject(
+				"SELECT COUNT(*) FROM stores WHERE subdomain = ?",
+				Integer.class,
+				subdomain
+		));
+		assertEquals(1, jdbcTemplate.queryForObject(
+				"""
+				SELECT COUNT(*)
+				FROM merchants m
+				JOIN stores s ON s.merchant_id = m.merchant_id
+				WHERE s.subdomain = ?
+				""",
+				Integer.class,
+				subdomain
+		));
+	}
+
+	@Test
+	void shouldRejectInvalidMerchantApiRequestWithoutPersisting() throws Exception {
+		long existingMerchants = merchantRepository.count();
+		long existingStores = storeRepository.count();
+
+		mockMvc.perform(post("/api/merchants")
+						.contentType(APPLICATION_JSON)
+						.content("""
+								{
+								  "merchantName": " ",
+								  "storeName": "Urban Store",
+								  "subdomain": "urban-store"
+								}
+								"""))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.status").value(400))
+				.andExpect(jsonPath("$.errors[0]").value("merchantName: must not be blank"));
+
+		mockMvc.perform(post("/api/merchants")
+						.contentType(APPLICATION_JSON)
+						.content("""
+								{
+								  "merchantName": "Urban Store LTDA",
+								  "storeName": "Urban Store",
+								  "subdomain": "invalid_subdomain"
+								}
+								"""))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.status").value(400));
+
+		assertEquals(existingMerchants, merchantRepository.count());
+		assertEquals(existingStores, storeRepository.count());
+	}
+
+	@Test
+	void shouldReturnConflictForDuplicateMerchantApiSubdomain() throws Exception {
+		String subdomain = uniqueSubdomain();
+		String request = """
+				{
+				  "merchantName": "Urban Store LTDA",
+				  "storeName": "Urban Store",
+				  "subdomain": "%s"
+				}
+				""".formatted(subdomain);
+
+		mockMvc.perform(post("/api/merchants").contentType(APPLICATION_JSON).content(request))
+				.andExpect(status().isCreated());
+
+		long merchantCountAfterFirstRequest = merchantRepository.count();
+		long storeCountAfterFirstRequest = storeRepository.count();
+
+		mockMvc.perform(post("/api/merchants").contentType(APPLICATION_JSON).content(request))
+				.andExpect(status().isConflict())
+				.andExpect(jsonPath("$.status").value(409))
+				.andExpect(jsonPath("$.detail").value("The requested store subdomain is already in use."));
+
+		assertEquals(merchantCountAfterFirstRequest, merchantRepository.count());
+		assertEquals(storeCountAfterFirstRequest, storeRepository.count());
 	}
 
 	private Store saveAfterStart(CountDownLatch startWrites, Store store) throws InterruptedException {
