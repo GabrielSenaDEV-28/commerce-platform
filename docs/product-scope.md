@@ -120,9 +120,8 @@ production exposure requires rate limiting and an abuse-prevention decision.
 
 ### Planned catalog and inventory management
 
-The following requirements describe planned functionality; the catalog,
-inventory management, management screens, and store-member permissions are not
-implemented yet.
+The item-type API described below is implemented. Product management, inventory
+management, management screens, and store-member permissions remain planned.
 
 #### Item types and variants
 
@@ -133,9 +132,37 @@ the merchant can choose a numeric or letter-based format. Numeric sizes support
 footwear, while letter-based sizes support values such as `PP`, `P`, `M`, and
 `G` for clothing. These are examples, not fixed platform-wide lists.
 
-The behavior of editing or deleting a type already used by products must be
-defined before implementation so existing products and their inventory remain
-consistent.
+The authenticated item-type API at `/api/item-types` supports creation, lookup,
+paginated listing, updates, deletion, and paginated history at
+`/{id}/history`. Names are unique within each store, ignoring case and leading
+or trailing spaces. A type records whether it uses color or size, and a size
+format (`NUMERIC` or `LETTER`) is required exactly when size is enabled.
+Individual products will define their own color and size values.
+
+Each change records its actor and before/after values, including deletion.
+When products are introduced, types referenced by products must not be deleted
+or have their variant configuration changed, although renaming remains allowed.
+This safeguard is not implemented yet because products do not exist.
+
+The item-type endpoints require a bearer access token and determine the store
+from the authenticated account, not from a client-supplied store identifier.
+For example, `POST /api/item-types` accepts:
+
+```json
+{
+  "name": "Camiseta",
+  "hasColor": true,
+  "hasSize": true,
+  "sizeFormat": "LETTER"
+}
+```
+
+`PUT /api/item-types/{id}` accepts the same complete representation.
+Creation returns `201`, updates and reads return `200`, deletion returns `204`,
+duplicate names return `409`, invalid input returns `400`, and an item type
+outside the authenticated store returns `404`. Lists and history accept
+zero-based `page` and `size` parameters; size defaults to 20 and is limited
+to 100. History remains available after deletion.
 
 #### Products and stock
 

@@ -3,6 +3,8 @@ package com.gabrielsena.commerce.api;
 import com.gabrielsena.commerce.auth.EmailAlreadyRegisteredException;
 import com.gabrielsena.commerce.auth.InvalidCredentialsException;
 import com.gabrielsena.commerce.auth.InvalidRefreshTokenException;
+import com.gabrielsena.commerce.catalog.ItemTypeNameInUseException;
+import com.gabrielsena.commerce.catalog.ItemTypeNotFoundException;
 import com.gabrielsena.commerce.store.InvalidSubdomainException;
 import com.gabrielsena.commerce.store.SubdomainAlreadyInUseException;
 import org.springframework.http.HttpStatus;
@@ -14,6 +16,16 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+    @ExceptionHandler(ItemTypeNotFoundException.class)
+    public ResponseEntity<ProblemDetail> handleItemTypeNotFound() {
+        return problem(HttpStatus.NOT_FOUND, "Item type not found.");
+    }
+
+    @ExceptionHandler(ItemTypeNameInUseException.class)
+    public ResponseEntity<ProblemDetail> handleItemTypeNameInUse() {
+        return problem(HttpStatus.CONFLICT, "An item type with this name already exists.");
+    }
 
     @ExceptionHandler(SubdomainAlreadyInUseException.class)
     public ResponseEntity<ProblemDetail> handleSubdomainAlreadyInUse() {
