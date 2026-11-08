@@ -2,9 +2,6 @@ package com.gabrielsena.commerce.catalog.api;
 
 import com.gabrielsena.commerce.catalog.application.ItemTypeService;
 import jakarta.validation.Valid;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -18,9 +15,11 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.util.UUID;
+
+import static com.gabrielsena.commerce.catalog.api.CatalogApiSupport.actor;
+import static com.gabrielsena.commerce.catalog.api.CatalogApiSupport.pageable;
 
 @RestController
 @RequestMapping("/api/item-types")
@@ -39,9 +38,10 @@ public class ItemTypeController {
 
     @GetMapping
     public PageResponse<ItemTypeResponse> list(@AuthenticationPrincipal Jwt jwt,
+                                                @RequestParam(defaultValue = "true") boolean active,
                                                 @RequestParam(defaultValue = "0") int page,
                                                 @RequestParam(defaultValue = "20") int size) {
-        return PageResponse.from(service.list(actor(jwt), pageable(page, size, "name", "id"))
+        return PageResponse.from(service.list(actor(jwt), active, pageable(page, size, "name", "id"))
                 .map(ItemTypeResponse::from));
     }
 
@@ -70,21 +70,9 @@ public class ItemTypeController {
         return ResponseEntity.noContent().build();
     }
 
-    private UUID actor(Jwt jwt) {
-        if (jwt == null || jwt.getSubject() == null) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);
-        }
-        try {
-            return UUID.fromString(jwt.getSubject());
-        } catch (IllegalArgumentException exception) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);
-        }
+    @PostMapping("/{id}/reactivate")
+    public ItemTypeResponse reactivate(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
+        return ItemTypeResponse.from(service.reactivate(actor(jwt), id));
     }
 
-    private Pageable pageable(int page, int size, String... sort) {
-        if (page < 0 || size < 1 || size > 100) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid page or size");
-        }
-        return PageRequest.of(page, size, Sort.by(sort));
-    }
 }

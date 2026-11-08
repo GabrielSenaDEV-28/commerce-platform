@@ -5,6 +5,7 @@ import com.gabrielsena.commerce.auth.InvalidCredentialsException;
 import com.gabrielsena.commerce.auth.InvalidRefreshTokenException;
 import com.gabrielsena.commerce.catalog.ItemTypeNameInUseException;
 import com.gabrielsena.commerce.catalog.ItemTypeNotFoundException;
+import com.gabrielsena.commerce.catalog.CatalogConflictException;
 import com.gabrielsena.commerce.store.InvalidSubdomainException;
 import com.gabrielsena.commerce.store.SubdomainAlreadyInUseException;
 import org.springframework.http.HttpStatus;
@@ -16,6 +17,11 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+    @ExceptionHandler(CatalogConflictException.class)
+    public ResponseEntity<ProblemDetail> handleCatalogConflict(CatalogConflictException exception) {
+        return problem(HttpStatus.CONFLICT, exception.getMessage());
+    }
 
     @ExceptionHandler(ItemTypeNotFoundException.class)
     public ResponseEntity<ProblemDetail> handleItemTypeNotFound() {

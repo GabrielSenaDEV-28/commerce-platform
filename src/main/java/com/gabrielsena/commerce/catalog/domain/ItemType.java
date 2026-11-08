@@ -37,6 +37,8 @@ public class ItemType {
     private Instant updatedAt;
     @Column(name = "updated_by", nullable = false)
     private UUID updatedBy;
+    @Column(nullable = false)
+    private boolean active = true;
 
     protected ItemType() {
     }
@@ -62,5 +64,11 @@ public class ItemType {
 
     public ItemTypeValues values() {
         return new ItemTypeValues(name, hasColor, hasSize, sizeFormat);
+    }
+
+    public void setActive(boolean active, UUID actorId, Instant now) {
+        this.active = active;
+        this.updatedBy = actorId;
+        this.updatedAt = now;
     }
 }

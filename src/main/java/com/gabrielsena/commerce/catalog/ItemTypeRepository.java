@@ -13,9 +13,9 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface ItemTypeRepository extends JpaRepository<ItemType, UUID> {
-    Page<ItemType> findByStoreId(UUID storeId, Pageable pageable);
+    Page<ItemType> findByStoreIdAndActive(UUID storeId, boolean active, Pageable pageable);
 
-    Optional<ItemType> findByIdAndStoreId(UUID id, UUID storeId);
+    Optional<ItemType> findByIdAndStoreIdAndActiveTrue(UUID id, UUID storeId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select i from ItemType i where i.id = :id and i.storeId = :storeId")

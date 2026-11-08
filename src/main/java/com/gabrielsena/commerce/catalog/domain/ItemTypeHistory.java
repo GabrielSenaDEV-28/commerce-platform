@@ -15,7 +15,7 @@ import java.util.UUID;
 @Table(name = "catalog_item_type_history")
 @Getter
 public class ItemTypeHistory {
-    public enum Action { CREATED, UPDATED, DELETED }
+    public enum Action { CREATED, UPDATED, DELETED, REACTIVATED }
 
     @Id
     @Column(name = "history_id")
@@ -29,7 +29,7 @@ public class ItemTypeHistory {
     @Column(name = "occurred_at", nullable = false)
     private Instant occurredAt;
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 10)
+    @Column(nullable = false, length = 16)
     private Action action;
     @Column(name = "old_name", length = 120)
     private String oldName;
