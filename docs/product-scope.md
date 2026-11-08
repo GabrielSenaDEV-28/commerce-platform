@@ -240,7 +240,7 @@ and dimensions up to two. The variant response includes these values under
 `shippingWeightKg`, `shippingWidthCm`, `shippingHeightCm` and
 `shippingLengthCm`. Existing variants remain unchanged and have null
 measurements until configured. Updates are recorded in product history.
-Missing measurements will prevent shipping quotes when quoting is implemented.
+Missing measurements prevent shipping quotes.
 
 Pickup is free and uses the same address as the shipping origin.
 
@@ -326,11 +326,27 @@ unknown product, variant or cart returns `404`. Integration errors, including
 missing authorization, are reported as `503` with
 `SHIPPING_TEMPORARILY_UNAVAILABLE`; they do not mean the service is free.
 
-The checkout does not consume these estimates: shipment selection and a fresh
-quote for the reserved items remain future work. The provider client currently
-targets sandbox only; no real sandbox validation has been completed. The
-public endpoints have no rate limiting, so abuse prevention and traffic limits
-are required before production exposure.
+`POST /api/public/checkout/{reservationId}/shipping-estimates` accepts
+`{"postalCode":"96020360"}` and requires the cart's `Cart-Token`, but not a
+customer login. It quotes only fully reserved items, using reservation prices
+and quantities and the current variant measurements and store origin. Items
+that were not reserved are excluded; their status remains available through
+the checkout API. An inactive, cancelled, expired or foreign reservation
+returns `409`, including if it expires or is cancelled during the provider
+call. A missing or foreign cart token returns `404`. The response adds
+`reservationId` and `expiresAt` to `quotes` and `unavailable`. Missing
+measurements, origin and integration errors use the same responses described
+above. Normal product and variant deactivation is blocked while active
+reservations exist.
+
+The checkout quote is informational, is not persisted or bound to an address,
+and does not guarantee price or availability. Selection, revalidation against
+the delivery address, and storing and charging shipping on the order remain
+future work. Existing delivery orders still omit shipping cost; do not treat
+their totals as final shipping-inclusive prices. The provider client currently
+targets sandbox only; no real sandbox validation has been completed. The public
+endpoints have no rate limiting, so abuse prevention and traffic limits are
+required before production exposure.
 
 #### Inventory
 
