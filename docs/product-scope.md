@@ -220,6 +220,34 @@ For example, `POST /api/products` accepts:
 }
 ```
 
+#### Shipping preparation
+
+The merchant can configure one Brazilian address for both shipping origin and
+future pickup via authenticated `GET` and `PUT /api/store/shipping-settings`.
+GET returns `404` until configured. PUT replaces the settings and accepts
+`postalCode` (eight digits), `street`, `number`, optional `complement`,
+`district`, `city`, `state` (a Brazilian UF), `pickupEnabled` (boolean) and
+optional `pickupInstructions` (up to 1,000 characters). The address is
+validated for format only, not verified externally. Settings are scoped to
+the authenticated merchant's store and are not public.
+
+After creating a variant, the merchant can set all its shipping measurements
+with `PUT /api/products/{productId}/variants/{variantId}/shipping`, for example
+`{"weightKg":0.125,"widthCm":10.25,"heightCm":3,"lengthCm":20}`.
+All four values must be positive; weight supports up to three decimal places
+and dimensions up to two. The variant response includes these values under
+`shippingWeightKg`, `shippingWidthCm`, `shippingHeightCm` and
+`shippingLengthCm`. Existing variants remain unchanged and have null
+measurements until configured. Updates are recorded in product history.
+Missing measurements will prevent shipping quotes when quoting is implemented.
+
+These settings do not yet enable shipping quotes or pickup orders. The planned
+pickup option is free, enabled per store and uses the same address as the
+shipping origin; pickup orders will not require a customer delivery address.
+Carrier integration and checkout changes remain future work.
+
+#### Inventory
+
 The authenticated inventory API manages physical stock per variant. A variant
 starts at zero, including variants created before inventory was introduced.
 The merchant may record positive whole-unit entries and exits with a reason;

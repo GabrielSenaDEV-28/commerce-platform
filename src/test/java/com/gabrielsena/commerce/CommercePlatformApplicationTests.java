@@ -477,6 +477,93 @@ class CommercePlatformApplicationTests {
 	}
 
 	@Test
+	void shippingSettingsShouldValidateAndRemainPrivateToEachStore() throws Exception {
+		CatalogActor owner = catalogActor();
+		CatalogActor other = catalogActor();
+		String token = "Bearer " + owner.token();
+		String path = "/api/store/shipping-settings";
+		String body = """
+				{"postalCode":"01001000","street":" Rua A ","number":"10","complement":" ",
+				 "district":"Centro","city":"Sao Paulo","state":"SP","pickupEnabled":true,
+				 "pickupInstructions":" Bring ID "}
+				""";
+		mockMvc.perform(get(path)).andExpect(status().isUnauthorized());
+		mockMvc.perform(get(path).header("Authorization", token)).andExpect(status().isNotFound());
+		for (String invalid : List.of(body.replace("01001000", "01001-000"),
+				body.replace("\"SP\"", "\"XX\""), body.replace("\" Rua A \"", "\" \""),
+				body.replace("\"pickupEnabled\":true", "\"pickupEnabled\":null"))) {
+			mockMvc.perform(put(path).header("Authorization", token).contentType(APPLICATION_JSON).content(invalid))
+					.andExpect(status().isBadRequest());
+		}
+		mockMvc.perform(put(path).header("Authorization", token).contentType(APPLICATION_JSON).content(body))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.street").value("Rua A"))
+				.andExpect(jsonPath("$.complement").isEmpty())
+				.andExpect(jsonPath("$.pickupEnabled").value(true))
+				.andExpect(jsonPath("$.pickupInstructions").value("Bring ID"))
+				.andExpect(r -> assertEquals("no-store", r.getResponse().getHeader("Cache-Control")));
+		mockMvc.perform(get(path).header("Authorization", "Bearer " + other.token())).andExpect(status().isNotFound());
+		mockMvc.perform(put(path).header("Authorization", "Bearer " + other.token()).contentType(APPLICATION_JSON)
+						.content(body.replace("Rua A", "Rua B").replace("true", "false")))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.pickupEnabled").value(false));
+		mockMvc.perform(get(path).header("Authorization", token)).andExpect(status().isOk())
+				.andExpect(jsonPath("$.street").value("Rua A")).andExpect(jsonPath("$.pickupEnabled").value(true));
+		mockMvc.perform(put(path).header("Authorization", token).contentType(APPLICATION_JSON)
+						.content(body.replace("true", "false")))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.pickupEnabled").value(false));
+
+		UUID merchant = merchantAccountRepository.findById(owner.id()).orElseThrow().getMerchantId();
+		UUID store = storeRepository.findByMerchantId(merchant).orElseThrow().getId();
+		customerAuthService.register(store, "Ana", "ana@example.com", "a-strong-password");
+		String customer = customerAuthService.login(store, "ana@example.com", "a-strong-password").accessToken();
+		mockMvc.perform(get(path).header("Authorization", "Bearer " + customer)).andExpect(status().isForbidden());
+	}
+
+	@Test
+	void variantShippingMeasurementsShouldValidatePreserveHistoryAndIsolateStores() throws Exception {
+		CatalogActor owner = catalogActor();
+		CatalogActor other = catalogActor();
+		InventoryFixture fixture = inventoryFixture(owner);
+		String token = "Bearer " + owner.token();
+		String path = "/api/products/" + fixture.productId() + "/variants/" + fixture.variantId() + "/shipping";
+		String body = "{\"weightKg\":0.125,\"widthCm\":10.25,\"heightCm\":3,\"lengthCm\":20}";
+		mockMvc.perform(get("/api/products/{id}/variants", fixture.productId()).header("Authorization", token))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.content[0].shippingWeightKg").isEmpty());
+		mockMvc.perform(put(path).contentType(APPLICATION_JSON).content(body)).andExpect(status().isUnauthorized());
+		for (String invalid : List.of(body.replace("0.125", "0"), body.replace("0.125", "-1"),
+				body.replace("0.125", "0.0001"), body.replace("10.25", "10.001"),
+				body.replace("\"lengthCm\":20", "\"lengthCm\":null"),
+				body.replace("0.125", "100000"))) {
+			mockMvc.perform(put(path).header("Authorization", token).contentType(APPLICATION_JSON).content(invalid))
+					.andExpect(status().isBadRequest());
+		}
+		mockMvc.perform(put(path).header("Authorization", "Bearer " + other.token())
+						.contentType(APPLICATION_JSON).content(body)).andExpect(status().isNotFound());
+		mockMvc.perform(put(path).header("Authorization", token).contentType(APPLICATION_JSON).content(body))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.shippingWeightKg").value(0.125))
+				.andExpect(jsonPath("$.shippingWidthCm").value(10.25))
+				.andExpect(jsonPath("$.shippingHeightCm").value(3))
+				.andExpect(jsonPath("$.shippingLengthCm").value(20));
+		Integer history = jdbcTemplate.queryForObject("""
+				SELECT COUNT(*) FROM catalog_product_history WHERE variant_id = ? AND field_name LIKE 'shipping%'
+				""", Integer.class, fixture.variantId());
+		assertEquals(4, history);
+		mockMvc.perform(put(path).header("Authorization", token).contentType(APPLICATION_JSON).content(body))
+				.andExpect(status().isOk());
+		assertEquals(history, jdbcTemplate.queryForObject("""
+				SELECT COUNT(*) FROM catalog_product_history WHERE variant_id = ? AND field_name LIKE 'shipping%'
+				""", Integer.class, fixture.variantId()));
+		mockMvc.perform(put(path).header("Authorization", token).contentType(APPLICATION_JSON)
+						.content(body.replace("0.125", "0.500")))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.shippingWeightKg").value(0.5));
+		mockMvc.perform(put("/api/products/{id}/variants/{variantId}", fixture.productId(), fixture.variantId())
+						.header("Authorization", token).contentType(APPLICATION_JSON).content("{\"price\":5}"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.shippingWeightKg").value(0.5));
+		assertThrows(DataIntegrityViolationException.class, () -> jdbcTemplate.update("""
+				UPDATE catalog_product_variants SET shipping_length_cm = NULL WHERE variant_id = ?
+				""", fixture.variantId()));
+	}
+
+	@Test
 	void productsShouldValidateInputAndIsolateEveryStore() throws Exception {
 		CatalogActor owner = catalogActor();
 		CatalogActor other = catalogActor();
