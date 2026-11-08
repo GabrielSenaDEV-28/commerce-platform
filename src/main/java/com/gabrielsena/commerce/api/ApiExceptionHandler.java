@@ -1,5 +1,8 @@
 package com.gabrielsena.commerce.api;
 
+import com.gabrielsena.commerce.auth.EmailAlreadyRegisteredException;
+import com.gabrielsena.commerce.auth.InvalidCredentialsException;
+import com.gabrielsena.commerce.auth.InvalidRefreshTokenException;
 import com.gabrielsena.commerce.store.InvalidSubdomainException;
 import com.gabrielsena.commerce.store.SubdomainAlreadyInUseException;
 import org.springframework.http.HttpStatus;
@@ -15,6 +18,16 @@ public class ApiExceptionHandler {
     @ExceptionHandler(SubdomainAlreadyInUseException.class)
     public ResponseEntity<ProblemDetail> handleSubdomainAlreadyInUse() {
         return problem(HttpStatus.CONFLICT, "The requested store subdomain is already in use.");
+    }
+
+    @ExceptionHandler(EmailAlreadyRegisteredException.class)
+    public ResponseEntity<ProblemDetail> handleEmailAlreadyRegistered() {
+        return problem(HttpStatus.CONFLICT, "An account already exists for the supplied email.");
+    }
+
+    @ExceptionHandler({InvalidCredentialsException.class, InvalidRefreshTokenException.class})
+    public ResponseEntity<ProblemDetail> handleInvalidAuthentication() {
+        return problem(HttpStatus.UNAUTHORIZED, "Authentication request is invalid.");
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

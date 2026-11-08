@@ -5,9 +5,20 @@ import com.gabrielsena.commerce.merchant.application.OnboardMerchant;
 import com.gabrielsena.commerce.merchant.application.OnboardMerchantCommand;
 import com.gabrielsena.commerce.merchant.application.OnboardMerchantResult;
 import com.gabrielsena.commerce.merchant.domain.Merchant;
+import com.gabrielsena.commerce.auth.MerchantAccountRepository;
+import com.gabrielsena.commerce.auth.RefreshTokenRepository;
+import com.gabrielsena.commerce.auth.InvalidRefreshTokenException;
+import com.gabrielsena.commerce.auth.application.AuthenticateMerchant;
+import com.gabrielsena.commerce.auth.application.RefreshAuthentication;
+import com.gabrielsena.commerce.auth.application.RegisterMerchant;
+import com.gabrielsena.commerce.auth.application.RegisterMerchantCommand;
+import com.gabrielsena.commerce.auth.application.TokenPair;
+import com.gabrielsena.commerce.auth.application.TokenService;
+import com.gabrielsena.commerce.auth.domain.MerchantAccount;
 import com.gabrielsena.commerce.store.StoreRepository;
 import com.gabrielsena.commerce.store.domain.Store;
 import com.gabrielsena.commerce.store.domain.Subdomain;
+import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,6 +33,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -34,8 +47,11 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.hamcrest.Matchers.hasItem;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -47,6 +63,9 @@ class CommercePlatformApplicationTests {
 
 	private static final String TEST_DATABASE_URL = validateTestDatabaseUrl(System.getenv("TEST_DATABASE_URL"));
 	private static final PostgreSQLContainer<?> POSTGRES = startPostgresContainerIfNeeded();
+	private static final String TEST_JWT_SECRET = Base64.getEncoder().encodeToString(
+			"commerce-platform-test-key-at-least-32-bytes".getBytes(StandardCharsets.UTF_8)
+	);
 
 	@Autowired
 	private OnboardMerchant onboardMerchant;
@@ -56,6 +75,21 @@ class CommercePlatformApplicationTests {
 
 	@Autowired
 	private StoreRepository storeRepository;
+
+	@Autowired
+	private MerchantAccountRepository merchantAccountRepository;
+
+	@Autowired
+	private RefreshTokenRepository refreshTokenRepository;
+
+	@Autowired
+	private RegisterMerchant registerMerchant;
+
+	@Autowired
+	private AuthenticateMerchant authenticateMerchant;
+
+	@Autowired
+	private RefreshAuthentication refreshAuthentication;
 
 	@Autowired
 	private JdbcTemplate jdbcTemplate;
@@ -87,6 +121,7 @@ class CommercePlatformApplicationTests {
 
 	@DynamicPropertySource
 	static void configureDatabase(DynamicPropertyRegistry registry) {
+		registry.add("security.jwt.secret", () -> TEST_JWT_SECRET);
 		if (POSTGRES != null) {
 			registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
 			registry.add("spring.datasource.username", POSTGRES::getUsername);
@@ -133,6 +168,266 @@ class CommercePlatformApplicationTests {
 		assertEquals(merchant.getId(), store.getMerchantId());
 		assertEquals("Urban Store", store.getName());
 		assertEquals(subdomain, store.getSubdomain().getValue());
+	}
+
+	@Test
+	void shouldCreateMerchantStoreAndAccountAtomicallyThroughPublicApi() throws Exception {
+		String subdomain = uniqueSubdomain();
+		String email = uniqueEmail();
+
+		mockMvc.perform(post("/api/merchants")
+						.contentType(APPLICATION_JSON)
+						.content("""
+								{
+								  "merchantName": "Urban Store LTDA",
+								  "storeName": "Urban Store",
+								  "subdomain": "%s",
+								  "email": "%s",
+								  "password": "a-strong-local-password"
+								}
+								""".formatted(subdomain, email)))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.merchantId").isNotEmpty())
+				.andExpect(jsonPath("$.storeId").isNotEmpty())
+				.andExpect(jsonPath("$.merchantName").value("Urban Store LTDA"))
+				.andExpect(jsonPath("$.storeName").value("Urban Store"))
+				.andExpect(jsonPath("$.subdomain").value(subdomain));
+
+		var account = merchantAccountRepository.findByEmail(email).orElseThrow();
+		assertNotNull(account.getPasswordHash());
+		assertTrue(!"a-strong-local-password".equals(account.getPasswordHash()));
+		assertEquals(1, jdbcTemplate.queryForObject(
+				"""
+				SELECT COUNT(*)
+				FROM merchants m
+				JOIN stores s ON s.merchant_id = m.merchant_id
+				JOIN merchant_accounts a ON a.merchant_id = m.merchant_id
+				WHERE s.subdomain = ? AND a.email = ?
+				""",
+				Integer.class,
+				subdomain,
+				email
+		));
+	}
+
+	@Test
+	void shouldRollbackMerchantAndStoreWhenAccountPersistenceFails() {
+		long existingMerchants = merchantRepository.count();
+		long existingStores = storeRepository.count();
+		long existingAccounts = merchantAccountRepository.count();
+		createFailingAccountTrigger();
+
+		try {
+			assertThrows(
+					DataAccessException.class,
+					() -> registerMerchant.execute(new RegisterMerchantCommand(
+							"Rollback Merchant",
+							"Rollback Store",
+							uniqueSubdomain(),
+							uniqueEmail(),
+							"a-strong-local-password"
+					))
+			);
+
+			assertEquals(existingMerchants, merchantRepository.count());
+			assertEquals(existingStores, storeRepository.count());
+			assertEquals(existingAccounts, merchantAccountRepository.count());
+		} finally {
+			dropFailingAccountTrigger();
+		}
+	}
+
+	@Test
+	void shouldRejectDuplicateMerchantAccountEmail() throws Exception {
+		String email = uniqueEmail();
+		String firstRequest = merchantRegistrationRequest(uniqueSubdomain(), email);
+		mockMvc.perform(post("/api/merchants").contentType(APPLICATION_JSON).content(firstRequest))
+				.andExpect(status().isCreated());
+
+		long existingMerchants = merchantRepository.count();
+		long existingStores = storeRepository.count();
+		long existingAccounts = merchantAccountRepository.count();
+
+		mockMvc.perform(post("/api/merchants")
+						.contentType(APPLICATION_JSON)
+						.content(merchantRegistrationRequest(uniqueSubdomain(), email.toUpperCase())))
+				.andExpect(status().isConflict())
+				.andExpect(jsonPath("$.status").value(409));
+
+		assertEquals(existingMerchants, merchantRepository.count());
+		assertEquals(existingStores, storeRepository.count());
+		assertEquals(existingAccounts, merchantAccountRepository.count());
+	}
+
+	@Test
+	void databaseShouldEnforceUniqueMerchantAccountEmail() {
+		String email = uniqueEmail();
+		Merchant firstMerchant = merchantRepository.saveAndFlush(Merchant.create("First " + UUID.randomUUID()));
+		Merchant secondMerchant = merchantRepository.saveAndFlush(Merchant.create("Second " + UUID.randomUUID()));
+
+		merchantAccountRepository.saveAndFlush(MerchantAccount.create(firstMerchant.getId(), email, "hash-one"));
+
+		assertThrows(
+				DataIntegrityViolationException.class,
+				() -> merchantAccountRepository.saveAndFlush(
+						MerchantAccount.create(secondMerchant.getId(), email, "hash-two")
+				)
+		);
+	}
+
+	@Test
+	void shouldNotAllowPasswordLoginForAccountWithoutLocalCredential() throws Exception {
+		String email = uniqueEmail();
+		Merchant merchant = merchantRepository.saveAndFlush(Merchant.create("External Login Merchant"));
+		merchantAccountRepository.saveAndFlush(MerchantAccount.create(merchant.getId(), email, null));
+
+		mockMvc.perform(post("/api/auth/login")
+						.contentType(APPLICATION_JSON)
+						.content("""
+								{"email":"%s","password":"a-strong-local-password"}
+								""".formatted(email)))
+				.andExpect(status().isUnauthorized())
+				.andExpect(jsonPath("$.detail").value("Authentication request is invalid."));
+	}
+
+	@Test
+	void shouldLoginRotateRefreshTokenAndLogout() throws Exception {
+		String email = uniqueEmail();
+		String password = "a-strong-local-password";
+		mockMvc.perform(post("/api/merchants")
+						.contentType(APPLICATION_JSON)
+						.content(merchantRegistrationRequest(uniqueSubdomain(), email, password)))
+				.andExpect(status().isCreated());
+
+		mockMvc.perform(post("/api/auth/login")
+						.contentType(APPLICATION_JSON)
+						.content("""
+								{"email":"%s","password":"wrong-password"}
+								""".formatted(email)))
+				.andExpect(status().isUnauthorized())
+				.andExpect(jsonPath("$.detail").value("Authentication request is invalid."));
+
+		mockMvc.perform(post("/api/auth/login")
+						.contentType(APPLICATION_JSON)
+						.content("""
+								{"email":"%s","password":"wrong-password"}
+								""".formatted(uniqueEmail())))
+				.andExpect(status().isUnauthorized())
+				.andExpect(jsonPath("$.detail").value("Authentication request is invalid."));
+
+		var loginResponse = mockMvc.perform(post("/api/auth/login")
+						.contentType(APPLICATION_JSON)
+						.content("""
+								{"email":"%s","password":"%s"}
+								""".formatted(email, password)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.tokenType").value("Bearer"))
+				.andExpect(jsonPath("$.expiresIn").value(TokenService.ACCESS_TOKEN_SECONDS))
+				.andReturn();
+		String loginBody = loginResponse.getResponse().getContentAsString();
+		String accessToken = JsonPath.read(loginBody, "$.accessToken");
+		String refreshToken = JsonPath.read(loginBody, "$.refreshToken");
+
+		var storedToken = refreshTokenRepository.findByTokenHash(TokenService.hashToken(refreshToken))
+				.orElseThrow();
+		assertNotNull(storedToken.getExpiresAt());
+		assertNull(storedToken.getRevokedAt());
+		assertEquals(401, mockMvc.perform(
+						org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/merchants")
+				).andReturn().getResponse().getStatus());
+		assertEquals(405, mockMvc.perform(
+						org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/merchants")
+								.header("Authorization", "Bearer " + accessToken)
+				).andReturn().getResponse().getStatus());
+
+		var refreshResponse = mockMvc.perform(post("/api/auth/refresh")
+						.contentType(APPLICATION_JSON)
+						.content("""
+								{"refreshToken":"%s"}
+								""".formatted(refreshToken)))
+				.andExpect(status().isOk())
+				.andReturn();
+		String rotatedRefreshToken = JsonPath.read(
+				refreshResponse.getResponse().getContentAsString(),
+				"$.refreshToken"
+		);
+		assertNotEquals(refreshToken, rotatedRefreshToken);
+		assertNotNull(refreshTokenRepository.findByTokenHash(TokenService.hashToken(refreshToken))
+				.orElseThrow().getRevokedAt());
+
+		mockMvc.perform(post("/api/auth/refresh")
+						.contentType(APPLICATION_JSON)
+						.content("""
+								{"refreshToken":"%s"}
+								""".formatted(refreshToken)))
+				.andExpect(status().isUnauthorized());
+
+		mockMvc.perform(post("/api/auth/logout")
+						.contentType(APPLICATION_JSON)
+						.content("""
+								{"refreshToken":"%s"}
+								""".formatted(rotatedRefreshToken)))
+				.andExpect(status().isNoContent());
+
+		mockMvc.perform(post("/api/auth/refresh")
+						.contentType(APPLICATION_JSON)
+						.content("""
+								{"refreshToken":"%s"}
+								""".formatted(rotatedRefreshToken)))
+				.andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	void shouldAllowOnlyOneConcurrentRefreshForTheSameToken() throws Exception {
+		String email = uniqueEmail();
+		String password = "a-strong-local-password";
+		registerMerchant.execute(new RegisterMerchantCommand(
+				"Concurrent Merchant",
+				"Concurrent Store",
+				uniqueSubdomain(),
+				email,
+				password
+		));
+		String refreshToken = authenticateMerchant.execute(email, password).refreshToken();
+		CountDownLatch startRefreshes = new CountDownLatch(1);
+
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		try {
+			Future<TokenPair> firstRefresh = executor.submit(
+					() -> refreshAfterStart(startRefreshes, refreshToken)
+			);
+			Future<TokenPair> secondRefresh = executor.submit(
+					() -> refreshAfterStart(startRefreshes, refreshToken)
+			);
+			startRefreshes.countDown();
+
+			int successfulRefreshes = 0;
+			int rejectedRefreshes = 0;
+			for (Future<TokenPair> refresh : List.of(firstRefresh, secondRefresh)) {
+				try {
+					assertNotNull(refresh.get(15, TimeUnit.SECONDS));
+					successfulRefreshes++;
+				} catch (ExecutionException exception) {
+					assertInstanceOf(InvalidRefreshTokenException.class, exception.getCause());
+					rejectedRefreshes++;
+				}
+			}
+
+			assertEquals(1, successfulRefreshes);
+			assertEquals(1, rejectedRefreshes);
+			assertEquals(1, jdbcTemplate.queryForObject(
+					"""
+					SELECT COUNT(*)
+					FROM refresh_tokens t
+					JOIN merchant_accounts a ON a.account_id = t.account_id
+					WHERE a.email = ? AND t.revoked_at IS NULL
+					""",
+					Integer.class,
+					email
+			));
+		} finally {
+			executor.shutdownNow();
+		}
 	}
 
 	@Test
@@ -221,6 +516,7 @@ class CommercePlatformApplicationTests {
 	@Test
 	void shouldCreateMerchantAndStoreThroughPublicApi() throws Exception {
 		String subdomain = uniqueSubdomain();
+		String email = uniqueEmail();
 
 		mockMvc.perform(post("/api/merchants")
 						.contentType(APPLICATION_JSON)
@@ -228,9 +524,11 @@ class CommercePlatformApplicationTests {
 								{
 								  "merchantName": "Urban Store LTDA",
 								  "storeName": "Urban Store",
-								  "subdomain": "%s"
+								  "subdomain": "%s",
+								  "email": "%s",
+								  "password": "a-strong-local-password"
 								}
-								""".formatted(subdomain)))
+								""".formatted(subdomain, email)))
 				.andExpect(status().isCreated())
 				.andExpect(jsonPath("$.merchantId").isNotEmpty())
 				.andExpect(jsonPath("$.storeId").isNotEmpty())
@@ -271,7 +569,7 @@ class CommercePlatformApplicationTests {
 								"""))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.status").value(400))
-				.andExpect(jsonPath("$.errors[0]").value("merchantName: must not be blank"));
+				.andExpect(jsonPath("$.errors").value(hasItem("merchantName: must not be blank")));
 
 		mockMvc.perform(post("/api/merchants")
 						.contentType(APPLICATION_JSON)
@@ -279,9 +577,11 @@ class CommercePlatformApplicationTests {
 								{
 								  "merchantName": "Urban Store LTDA",
 								  "storeName": "Urban Store",
-								  "subdomain": "invalid_subdomain"
+								  "subdomain": "invalid_subdomain",
+								  "email": "%s",
+								  "password": "a-strong-local-password"
 								}
-								"""))
+								""".formatted(uniqueEmail())))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.status").value(400));
 
@@ -292,21 +592,24 @@ class CommercePlatformApplicationTests {
 	@Test
 	void shouldReturnConflictForDuplicateMerchantApiSubdomain() throws Exception {
 		String subdomain = uniqueSubdomain();
-		String request = """
+		String firstRequest = """
 				{
 				  "merchantName": "Urban Store LTDA",
 				  "storeName": "Urban Store",
-				  "subdomain": "%s"
+				  "subdomain": "%s",
+				  "email": "%s",
+				  "password": "a-strong-local-password"
 				}
-				""".formatted(subdomain);
+				""".formatted(subdomain, uniqueEmail());
+		String secondRequest = merchantRegistrationRequest(subdomain, uniqueEmail());
 
-		mockMvc.perform(post("/api/merchants").contentType(APPLICATION_JSON).content(request))
+		mockMvc.perform(post("/api/merchants").contentType(APPLICATION_JSON).content(firstRequest))
 				.andExpect(status().isCreated());
 
 		long merchantCountAfterFirstRequest = merchantRepository.count();
 		long storeCountAfterFirstRequest = storeRepository.count();
 
-		mockMvc.perform(post("/api/merchants").contentType(APPLICATION_JSON).content(request))
+		mockMvc.perform(post("/api/merchants").contentType(APPLICATION_JSON).content(secondRequest))
 				.andExpect(status().isConflict())
 				.andExpect(jsonPath("$.status").value(409))
 				.andExpect(jsonPath("$.detail").value("The requested store subdomain is already in use."));
@@ -320,6 +623,14 @@ class CommercePlatformApplicationTests {
 			throw new IllegalStateException("Concurrent store writes did not start");
 		}
 		return storeRepository.saveAndFlush(store);
+	}
+
+	private TokenPair refreshAfterStart(CountDownLatch startRefreshes, String refreshToken)
+			throws InterruptedException {
+		if (!startRefreshes.await(10, TimeUnit.SECONDS)) {
+			throw new IllegalStateException("Concurrent refresh requests did not start");
+		}
+		return refreshAuthentication.execute(refreshToken);
 	}
 
 	private void createFailingStoreTrigger() {
@@ -345,6 +656,48 @@ class CommercePlatformApplicationTests {
 	private void dropFailingStoreTrigger() {
 		jdbcTemplate.execute("DROP TRIGGER IF EXISTS commerce_test_fail_store_insert ON stores");
 		jdbcTemplate.execute("DROP FUNCTION IF EXISTS commerce_test_fail_store_insert()");
+	}
+
+	private void createFailingAccountTrigger() {
+		dropFailingAccountTrigger();
+		jdbcTemplate.execute("""
+				CREATE OR REPLACE FUNCTION commerce_test_fail_account_insert()
+				RETURNS trigger LANGUAGE plpgsql AS $$
+				BEGIN
+					RAISE EXCEPTION 'Simulated account insert failure';
+				END;
+				$$
+				""");
+		jdbcTemplate.execute("""
+				CREATE TRIGGER commerce_test_fail_account_insert
+				BEFORE INSERT ON merchant_accounts
+				FOR EACH ROW EXECUTE FUNCTION commerce_test_fail_account_insert()
+				""");
+	}
+
+	private void dropFailingAccountTrigger() {
+		jdbcTemplate.execute("DROP TRIGGER IF EXISTS commerce_test_fail_account_insert ON merchant_accounts");
+		jdbcTemplate.execute("DROP FUNCTION IF EXISTS commerce_test_fail_account_insert()");
+	}
+
+	private String merchantRegistrationRequest(String subdomain, String email) {
+		return merchantRegistrationRequest(subdomain, email, "a-strong-local-password");
+	}
+
+	private String merchantRegistrationRequest(String subdomain, String email, String password) {
+		return """
+				{
+				  "merchantName": "Urban Store LTDA",
+				  "storeName": "Urban Store",
+				  "subdomain": "%s",
+				  "email": "%s",
+				  "password": "%s"
+				}
+				""".formatted(subdomain, email, password);
+	}
+
+	private String uniqueEmail() {
+		return "merchant-" + UUID.randomUUID() + "@example.test";
 	}
 
 	private String uniqueSubdomain() {

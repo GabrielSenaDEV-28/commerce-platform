@@ -87,16 +87,32 @@ browse the catalog, purchase products, and follow the lifecycle of their orders.
 14. After confirmation, the merchant fulfills the order and the customer can
     follow its delivery lifecycle.
 
-### Merchant onboarding API (MVP)
+### Merchant onboarding and local authentication API (MVP)
 
 Merchant self-registration is available through the public
-`POST /api/merchants` endpoint. It creates a merchant and its initial store,
-returning `201 Created`; invalid input returns `400 Bad Request`, and an
-already-used subdomain returns `409 Conflict`.
+`POST /api/merchants` endpoint. It creates a merchant, its initial store, and
+the merchant's local email/password account in one transaction, returning
+`201 Created`; invalid input returns `400 Bad Request`, and an already-used
+subdomain or email returns `409 Conflict`.
 
-This endpoint does not require authentication in the initial version.
-Unauthenticated public access can be abused to create unwanted registrations;
-production exposure requires a separate abuse-prevention decision.
+The request includes `merchantName`, `storeName`, `subdomain`, `email`, and
+`password`. Configure `JWT_SECRET_BASE64` with at least 32 cryptographically
+random bytes encoded as Base64 before starting the application. For local
+development, run `export JWT_SECRET_BASE64="$(openssl rand -base64 32)"`;
+keep it outside the repository and do not log or share it.
+
+Local authentication is available through `POST /api/auth/login`,
+`POST /api/auth/refresh`, and `POST /api/auth/logout`. Access JWTs expire after
+15 minutes; refresh tokens expire after 7 days and are rotated on refresh.
+Logout revokes the submitted refresh token; an already-issued access token
+remains valid until it expires. Email
+verification and external identity providers, including Google, are not part
+of this version. The access account is separate from the Merchant profile so a
+future provider identity can be linked without treating provider email as its
+stable identifier.
+
+Registration and authentication endpoints are public. They can be abused;
+production exposure requires rate limiting and an abuse-prevention decision.
 
 ## 5. Initial Scope
 
@@ -107,6 +123,7 @@ It includes:
 
 - Store creation and basic configuration.
 - Platform-provided store subdomain.
+- Merchant local email/password login.
 - Product and variant management.
 - Inventory management.
 - Product catalog browsing.
@@ -123,7 +140,6 @@ The following capabilities are intentionally excluded from the initial version:
 - Custom domain connection.
 - Real payment provider integration.
 - Real shipping carrier integration.
-- Authentication and authorization.
 - Discounts, coupons, and promotions.
 - Product reviews and ratings.
 - Returns and refunds.
@@ -140,7 +156,8 @@ Potential future capabilities include:
 - Custom domain connection.
 - Payment provider integrations, including PIX and credit cards.
 - Shipping carrier integrations and shipment tracking.
-- Authentication, authorization, and store member management.
+- Authorization and store member management.
+- External identity providers, including Google, and email verification.
 - Advanced storefront customization.
 - Discounts, coupons, and promotional campaigns.
 - Customer notifications.
