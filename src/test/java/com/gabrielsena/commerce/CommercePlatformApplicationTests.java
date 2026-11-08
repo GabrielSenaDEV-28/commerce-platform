@@ -15,6 +15,17 @@ import com.gabrielsena.commerce.auth.application.RegisterMerchantCommand;
 import com.gabrielsena.commerce.auth.application.TokenPair;
 import com.gabrielsena.commerce.auth.application.TokenService;
 import com.gabrielsena.commerce.auth.domain.MerchantAccount;
+import com.gabrielsena.commerce.catalog.ItemTypeNameInUseException;
+import com.gabrielsena.commerce.catalog.CatalogConflictException;
+import com.gabrielsena.commerce.catalog.ItemTypeNotFoundException;
+import com.gabrielsena.commerce.catalog.application.ItemTypeService;
+import com.gabrielsena.commerce.catalog.application.ProductService;
+import com.gabrielsena.commerce.catalog.api.ProductRequest;
+import com.gabrielsena.commerce.catalog.api.VariantRequest;
+import com.gabrielsena.commerce.catalog.domain.ItemType;
+import com.gabrielsena.commerce.catalog.domain.ItemTypeValues;
+import com.gabrielsena.commerce.catalog.domain.Product;
+import com.gabrielsena.commerce.catalog.domain.SizeFormat;
 import com.gabrielsena.commerce.store.StoreRepository;
 import com.gabrielsena.commerce.store.domain.Store;
 import com.gabrielsena.commerce.store.domain.Subdomain;
@@ -27,13 +38,20 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
+import org.springframework.security.oauth2.jwt.JwsHeader;
+import org.springframework.security.oauth2.jwt.JwtClaimsSet;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 import java.net.URI;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
@@ -54,6 +72,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.hamcrest.Matchers.hasItem;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -90,6 +111,15 @@ class CommercePlatformApplicationTests {
 
 	@Autowired
 	private RefreshAuthentication refreshAuthentication;
+
+	@Autowired
+	private ItemTypeService itemTypeService;
+
+	@Autowired
+	private ProductService productService;
+
+	@Autowired
+	private JwtEncoder jwtEncoder;
 
 	@Autowired
 	private JdbcTemplate jdbcTemplate;
@@ -151,6 +181,498 @@ class CommercePlatformApplicationTests {
 
 	@Test
 	void contextLoads() {
+	}
+
+	@Test
+	void itemTypesShouldSupportCrudAuditAndStoreIsolation() throws Exception {
+		CatalogActor owner = catalogActor();
+		CatalogActor other = catalogActor();
+		String initial = """
+				{"name":" Camiseta ","hasColor":true,"hasSize":true,"sizeFormat":"LETTER"}
+				""";
+		String changed = """
+				{"name":"Tênis","hasColor":true,"hasSize":true,"sizeFormat":"NUMERIC"}
+				""";
+		mockMvc.perform(post("/api/item-types").contentType(APPLICATION_JSON).content(initial))
+				.andExpect(status().isUnauthorized());
+		String body = mockMvc.perform(post("/api/item-types")
+						.header("Authorization", "Bearer " + owner.token())
+						.contentType(APPLICATION_JSON).content(initial))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.name").value("Camiseta"))
+				.andExpect(jsonPath("$.createdBy").value(owner.id().toString()))
+				.andExpect(jsonPath("$.createdAt").isNotEmpty())
+				.andReturn().getResponse().getContentAsString();
+		String id = JsonPath.read(body, "$.id");
+
+		mockMvc.perform(post("/api/item-types").header("Authorization", "Bearer " + owner.token())
+						.contentType(APPLICATION_JSON)
+						.content("""
+								{"name":"camiseta","hasColor":false,"hasSize":false}
+								"""))
+				.andExpect(status().isConflict());
+		mockMvc.perform(post("/api/item-types").header("Authorization", "Bearer " + other.token())
+						.contentType(APPLICATION_JSON).content(initial))
+				.andExpect(status().isCreated());
+
+		mockMvc.perform(get("/api/item-types").header("Authorization", "Bearer " + owner.token())
+						.param("size", "1"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1))
+				.andExpect(jsonPath("$.content[0].id").value(id));
+		mockMvc.perform(get("/api/item-types").header("Authorization", "Bearer " + owner.token())
+						.param("size", "101"))
+				.andExpect(status().isBadRequest());
+		mockMvc.perform(get("/api/item-types/{id}", id).header("Authorization", "Bearer " + other.token()))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(put("/api/item-types/{id}", id).header("Authorization", "Bearer " + other.token())
+						.contentType(APPLICATION_JSON).content(changed))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(delete("/api/item-types/{id}", id).header("Authorization", "Bearer " + other.token()))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get("/api/item-types/{id}/history", id).header("Authorization", "Bearer " + other.token()))
+				.andExpect(status().isNotFound());
+
+		mockMvc.perform(put("/api/item-types/{id}", id).header("Authorization", "Bearer " + owner.token())
+						.contentType(APPLICATION_JSON).content(changed))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.name").value("Tênis"))
+				.andExpect(jsonPath("$.sizeFormat").value("NUMERIC"))
+				.andExpect(jsonPath("$.updatedBy").value(owner.id().toString()));
+		mockMvc.perform(get("/api/item-types/{id}", id).header("Authorization", "Bearer " + owner.token()))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.name").value("Tênis"));
+		mockMvc.perform(delete("/api/item-types/{id}", id).header("Authorization", "Bearer " + owner.token()))
+				.andExpect(status().isNoContent());
+		mockMvc.perform(get("/api/item-types/{id}", id).header("Authorization", "Bearer " + owner.token()))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(get("/api/item-types/{id}/history", id).header("Authorization", "Bearer " + owner.token()))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(3))
+				.andExpect(jsonPath("$.content[0].action").value("CREATED"))
+				.andExpect(jsonPath("$.content[1].before.name").value("Camiseta"))
+				.andExpect(jsonPath("$.content[1].after.name").value("Tênis"))
+				.andExpect(jsonPath("$.content[2].action").value("DELETED"))
+				.andExpect(jsonPath("$.content[2].actorId").value(owner.id().toString()));
+	}
+
+	@Test
+	void itemTypesShouldRejectInvalidConfigurations() throws Exception {
+		CatalogActor actor = catalogActor();
+		for (String body : List.of(
+				"{\"name\":\" \",\"hasColor\":true,\"hasSize\":false}",
+				"{\"name\":\"Shoes\",\"hasColor\":true,\"hasSize\":true}",
+				"{\"name\":\"Shoes\",\"hasColor\":true,\"hasSize\":false,\"sizeFormat\":\"LETTER\"}",
+				"{\"name\":\"Shoes\",\"hasSize\":false}",
+				"{\"name\":\"Shoes\",\"hasColor\":true,\"hasSize\":true,\"sizeFormat\":\"OTHER\"}"
+		)) {
+			mockMvc.perform(post("/api/item-types").header("Authorization", "Bearer " + actor.token())
+							.contentType(APPLICATION_JSON).content(body))
+					.andExpect(status().isBadRequest());
+		}
+	}
+
+	@Test
+	void itemTypesShouldPaginateAndRejectConflictingRenames() throws Exception {
+		CatalogActor actor = catalogActor();
+		String token = "Bearer " + actor.token();
+		String shirt = "{\"name\":\"Camiseta\",\"hasColor\":true,\"hasSize\":false}";
+		String shoes = "{\"name\":\"Tênis\",\"hasColor\":true,\"hasSize\":true,\"sizeFormat\":\"NUMERIC\"}";
+		String id = JsonPath.read(mockMvc.perform(post("/api/item-types").header("Authorization", token)
+						.contentType(APPLICATION_JSON).content(shoes))
+				.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(), "$.id");
+		mockMvc.perform(post("/api/item-types").header("Authorization", token)
+						.contentType(APPLICATION_JSON).content(shirt)).andExpect(status().isCreated());
+		mockMvc.perform(put("/api/item-types/{id}", id).header("Authorization", token)
+						.contentType(APPLICATION_JSON).content(shirt)).andExpect(status().isConflict());
+		mockMvc.perform(get("/api/item-types").header("Authorization", token).param("size", "1").param("page", "0"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(2))
+				.andExpect(jsonPath("$.totalPages").value(2)).andExpect(jsonPath("$.content[0].name").value("Camiseta"));
+		mockMvc.perform(get("/api/item-types").header("Authorization", token).param("size", "1").param("page", "1"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.content[0].name").value("Tênis"));
+		mockMvc.perform(get("/api/item-types/{id}", id).header("Authorization", token))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.name").value("Tênis"));
+		mockMvc.perform(get("/api/item-types/{id}/history", id).header("Authorization", token))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1));
+	}
+
+	@Test
+	void itemTypesShouldResolveStoreFromAccountRatherThanTokenMerchantClaim() throws Exception {
+		CatalogActor owner = catalogActor();
+		CatalogActor other = catalogActor();
+		String id = JsonPath.read(mockMvc.perform(post("/api/item-types")
+						.header("Authorization", "Bearer " + owner.token())
+						.contentType(APPLICATION_JSON)
+						.content("{\"name\":\"Camiseta\",\"hasColor\":true,\"hasSize\":false}"))
+				.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(), "$.id");
+
+		UUID ownerMerchantId = merchantAccountRepository.findById(owner.id()).orElseThrow().getMerchantId();
+		String mismatchedToken = tokenWithClaims(other.id(), ownerMerchantId);
+		mockMvc.perform(get("/api/item-types/{id}", id).header("Authorization", "Bearer " + mismatchedToken))
+				.andExpect(status().isNotFound());
+		String unknownAccount = tokenWithClaims(UUID.randomUUID(), ownerMerchantId);
+		mockMvc.perform(get("/api/item-types").header("Authorization", "Bearer " + unknownAccount))
+				.andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	void itemTypesShouldEnforceUniqueNameUnderConcurrency() throws Exception {
+		CatalogActor actor = catalogActor();
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		try {
+			Future<ItemType> first = executor.submit(() -> createItemAfterStart(start, actor.id(), " Camiseta "));
+			Future<ItemType> second = executor.submit(() -> createItemAfterStart(start, actor.id(), "camiseta"));
+			start.countDown();
+			int created = 0;
+			int rejected = 0;
+			for (Future<ItemType> result : List.of(first, second)) {
+				try {
+					assertNotNull(result.get(15, TimeUnit.SECONDS));
+					created++;
+				} catch (ExecutionException exception) {
+					assertInstanceOf(ItemTypeNameInUseException.class, exception.getCause());
+					rejected++;
+				}
+			}
+			assertEquals(1, created);
+			assertEquals(1, rejected);
+		} finally {
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
+	void itemTypeAndAuditShouldRollbackTogether() {
+		CatalogActor actor = catalogActor();
+		jdbcTemplate.execute("""
+				CREATE OR REPLACE FUNCTION commerce_test_fail_item_history()
+				RETURNS trigger LANGUAGE plpgsql AS $$
+				BEGIN
+					IF NEW.new_name = 'force-history-failure' THEN
+						RAISE EXCEPTION 'Simulated history insert failure';
+					END IF;
+					RETURN NEW;
+				END;
+				$$
+				""");
+		jdbcTemplate.execute("""
+				CREATE TRIGGER commerce_test_fail_item_history
+				BEFORE INSERT ON catalog_item_type_history
+				FOR EACH ROW EXECUTE FUNCTION commerce_test_fail_item_history()
+				""");
+		try {
+			assertThrows(DataAccessException.class, () -> itemTypeService.create(actor.id(),
+					new ItemTypeValues("force-history-failure", false, false, null)));
+			assertEquals(0, jdbcTemplate.queryForObject(
+					"SELECT COUNT(*) FROM catalog_item_types WHERE name = ?", Integer.class, "force-history-failure"));
+		} finally {
+			jdbcTemplate.execute("DROP TRIGGER commerce_test_fail_item_history ON catalog_item_type_history");
+			jdbcTemplate.execute("DROP FUNCTION commerce_test_fail_item_history()");
+		}
+	}
+
+	@Test
+	void productsShouldPreserveVariantStateAndHistoryAcrossDeactivation() throws Exception {
+		CatalogActor actor = catalogActor();
+		String token = "Bearer " + actor.token();
+		ItemType type = itemTypeService.create(actor.id(), new ItemTypeValues("Shirts", true, true, SizeFormat.LETTER));
+		String request = """
+				{"itemTypeId":"%s","sku":" SKU-1 ","name":" Shirt ","description":"Cotton",
+				"price":100.00,"variants":[{"color":"Black","size":"2XL"},{"color":"White","size":"M","price":120.00}]}
+				""".formatted(type.getId());
+		String productId = JsonPath.read(mockMvc.perform(post("/api/products").header("Authorization", token)
+						.contentType(APPLICATION_JSON).content(request))
+				.andExpect(status().isCreated()).andExpect(jsonPath("$.sku").value("SKU-1"))
+				.andExpect(jsonPath("$.createdBy").value(actor.id().toString()))
+				.andReturn().getResponse().getContentAsString(), "$.id");
+		String variantsBody = mockMvc.perform(get("/api/products/{id}/variants", productId)
+						.header("Authorization", token))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(2))
+				.andReturn().getResponse().getContentAsString();
+		List<String> ids = JsonPath.read(variantsBody, "$.content[*].id");
+		List<String> sizes = JsonPath.read(variantsBody, "$.content[*].size");
+		String blackId = ids.get(sizes.indexOf("2XL"));
+		String whiteId = ids.get(sizes.indexOf("M"));
+		mockMvc.perform(put("/api/products/{id}/variants/{variantId}", productId, blackId)
+						.header("Authorization", token).contentType(APPLICATION_JSON).content("{\"price\":75.50}"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.effectivePrice").value(75.50));
+		mockMvc.perform(put("/api/products/{id}/variants/{variantId}", productId, blackId)
+						.header("Authorization", token).contentType(APPLICATION_JSON).content("{\"price\":null}"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.effectivePrice").value(100.00));
+		mockMvc.perform(put("/api/products/{id}", productId).header("Authorization", token)
+						.contentType(APPLICATION_JSON)
+						.content("{\"sku\":\"SKU-1\",\"name\":\"Shirt updated\",\"description\":\"Cotton\",\"price\":110}"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.name").value("Shirt updated"))
+				.andExpect(jsonPath("$.updatedBy").value(actor.id().toString()));
+		mockMvc.perform(get("/api/products/{id}/variants", productId).header("Authorization", token))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.content[*].effectivePrice", hasItem(110.0)));
+		Integer historyCount = jdbcTemplate.queryForObject(
+				"SELECT COUNT(*) FROM catalog_product_history WHERE product_id = ?",
+				Integer.class, UUID.fromString(productId));
+		mockMvc.perform(put("/api/products/{id}", productId).header("Authorization", token)
+						.contentType(APPLICATION_JSON)
+						.content("{\"sku\":\"SKU-1\",\"name\":\"Shirt updated\",\"description\":\"Cotton\",\"price\":110.00}"))
+				.andExpect(status().isOk());
+		assertEquals(historyCount, jdbcTemplate.queryForObject(
+				"SELECT COUNT(*) FROM catalog_product_history WHERE product_id = ?",
+				Integer.class, UUID.fromString(productId)));
+		mockMvc.perform(delete("/api/products/{id}/variants/{variantId}", productId, whiteId)
+				.header("Authorization", token)).andExpect(status().isNoContent());
+		mockMvc.perform(delete("/api/products/{id}", productId).header("Authorization", token))
+				.andExpect(status().isNoContent());
+		mockMvc.perform(get("/api/products").header("Authorization", token).param("active", "false"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.content[0].id").value(productId));
+		mockMvc.perform(post("/api/products").header("Authorization", token)
+						.contentType(APPLICATION_JSON).content(request)).andExpect(status().isConflict());
+		mockMvc.perform(delete("/api/item-types/{id}", type.getId()).header("Authorization", token))
+				.andExpect(status().isConflict());
+		mockMvc.perform(put("/api/item-types/{id}", type.getId()).header("Authorization", token)
+						.contentType(APPLICATION_JSON)
+						.content("{\"name\":\"New name\",\"hasColor\":false,\"hasSize\":false}"))
+				.andExpect(status().isConflict());
+		mockMvc.perform(put("/api/item-types/{id}", type.getId()).header("Authorization", token)
+						.contentType(APPLICATION_JSON)
+						.content("{\"name\":\"New name\",\"hasColor\":true,\"hasSize\":true,\"sizeFormat\":\"LETTER\"}"))
+				.andExpect(status().isOk());
+		mockMvc.perform(post("/api/products/{id}/reactivate", productId).header("Authorization", token))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.active").value(true));
+		mockMvc.perform(get("/api/products/{id}/variants", productId).header("Authorization", token))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1))
+				.andExpect(jsonPath("$.content[0].id").value(blackId));
+		mockMvc.perform(get("/api/products/{id}/variants", productId).header("Authorization", token)
+						.param("active", "false"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.content[0].id").value(whiteId));
+		mockMvc.perform(post("/api/products/{id}/variants/{variantId}/reactivate", productId, whiteId)
+						.header("Authorization", token))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.effectivePrice").value(120.00));
+		mockMvc.perform(get("/api/products/{id}/history", productId).header("Authorization", token)
+						.param("size", "100"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.content[*].action", hasItem("REACTIVATED")))
+				.andExpect(jsonPath("$.content[*].actorId", hasItem(actor.id().toString())));
+	}
+
+	@Test
+	void productsShouldValidateInputAndIsolateEveryStore() throws Exception {
+		CatalogActor owner = catalogActor();
+		CatalogActor other = catalogActor();
+		String token = "Bearer " + owner.token();
+		ItemType type = itemTypeService.create(owner.id(), new ItemTypeValues("Shoes", true, true, SizeFormat.NUMERIC));
+		String base = "{\"itemTypeId\":\"%s\",\"sku\":\"one\",\"name\":\"Shoe\",\"description\":\"Shoe\",\"price\":10,\"variants\":%s}";
+		for (String invalid : List.of("[]", "[{\"color\":\"Black\"}]", "[{\"color\":\"Black\",\"size\":\"40\",\"price\":-1}]",
+				"[{\"color\":\"Black\",\"size\":\"40\",\"price\":1.001}]")) {
+			mockMvc.perform(post("/api/products").header("Authorization", token).contentType(APPLICATION_JSON)
+							.content(base.formatted(type.getId(), invalid))).andExpect(status().isBadRequest());
+		}
+		String duplicate = "[{\"color\":\" Black \",\"size\":\"38/40\"},{\"color\":\"black\",\"size\":\"38/40\"}]";
+		mockMvc.perform(post("/api/products").header("Authorization", token).contentType(APPLICATION_JSON)
+						.content(base.formatted(type.getId(), duplicate))).andExpect(status().isConflict());
+		String productId = JsonPath.read(mockMvc.perform(post("/api/products").header("Authorization", token)
+						.contentType(APPLICATION_JSON)
+						.content(base.formatted(type.getId(), "[{\"color\":\"Black\",\"size\":\"38/40\"}]")))
+				.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(), "$.id");
+		String variantsBody = mockMvc.perform(get("/api/products/{id}/variants", productId).header("Authorization", token))
+				.andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+		String variantId = JsonPath.read(variantsBody, "$.content[0].id");
+		mockMvc.perform(get("/api/products")).andExpect(status().isUnauthorized());
+		mockMvc.perform(get("/api/products").header("Authorization", token).param("size", "101"))
+				.andExpect(status().isBadRequest());
+		String otherToken = "Bearer " + other.token();
+		mockMvc.perform(get("/api/products/{id}", productId).header("Authorization", otherToken)).andExpect(status().isNotFound());
+		mockMvc.perform(get("/api/products/{id}/variants", productId).header("Authorization", otherToken)).andExpect(status().isNotFound());
+		mockMvc.perform(get("/api/products/{id}/history", productId).header("Authorization", otherToken)).andExpect(status().isNotFound());
+		mockMvc.perform(delete("/api/products/{id}", productId).header("Authorization", otherToken)).andExpect(status().isNotFound());
+		mockMvc.perform(put("/api/products/{id}/variants/{variantId}", productId, variantId)
+						.header("Authorization", otherToken).contentType(APPLICATION_JSON).content("{\"price\":2}"))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(post("/api/products/{id}/variants", productId).header("Authorization", token)
+						.contentType(APPLICATION_JSON).content("{\"color\":\"BLACK\",\"size\":\"38/40\"}"))
+				.andExpect(status().isConflict());
+		mockMvc.perform(post("/api/products").header("Authorization", otherToken).contentType(APPLICATION_JSON)
+						.content(base.formatted(type.getId(), "[{\"color\":\"Black\",\"size\":\"40\"}]")))
+				.andExpect(status().isNotFound());
+		UUID merchantId = merchantAccountRepository.findById(owner.id()).orElseThrow().getMerchantId();
+		mockMvc.perform(get("/api/products/{id}", productId)
+						.header("Authorization", "Bearer " + tokenWithClaims(other.id(), merchantId)))
+				.andExpect(status().isNotFound());
+	}
+
+	@Test
+	void itemTypesShouldReserveInactiveNamesAndAllowRecovery() throws Exception {
+		CatalogActor actor = catalogActor();
+		String token = "Bearer " + actor.token();
+		ItemType type = itemTypeService.create(actor.id(), new ItemTypeValues("Accessory", false, false, null));
+		mockMvc.perform(delete("/api/item-types/{id}", type.getId()).header("Authorization", token))
+				.andExpect(status().isNoContent());
+		mockMvc.perform(get("/api/item-types").header("Authorization", token).param("active", "false"))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.content[0].active").value(false));
+		mockMvc.perform(post("/api/item-types").header("Authorization", token).contentType(APPLICATION_JSON)
+						.content("{\"name\":\"accessory\",\"hasColor\":false,\"hasSize\":false}"))
+				.andExpect(status().isConflict());
+		mockMvc.perform(post("/api/item-types/{id}/reactivate", type.getId()).header("Authorization", token))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.active").value(true));
+		mockMvc.perform(get("/api/item-types/{id}/history", type.getId()).header("Authorization", token))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.content[*].action", hasItem("REACTIVATED")));
+	}
+
+	@Test
+	void productsWithoutAttributesHaveOneReservedCombinationPerProduct() throws Exception {
+		CatalogActor actor = catalogActor();
+		CatalogActor other = catalogActor();
+		String token = "Bearer " + actor.token();
+		ItemType type = itemTypeService.create(actor.id(), new ItemTypeValues("Simple", false, false, null));
+		ItemType otherType = itemTypeService.create(other.id(), new ItemTypeValues("Simple", false, false, null));
+		String json = "{\"itemTypeId\":\"%s\",\"sku\":\"shared\",\"name\":\"Item\",\"description\":\"Item\",\"price\":0,\"variants\":[{}]}";
+		String id = JsonPath.read(mockMvc.perform(post("/api/products").header("Authorization", token)
+						.contentType(APPLICATION_JSON).content(json.formatted(type.getId())))
+				.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(), "$.id");
+		mockMvc.perform(post("/api/products").header("Authorization", "Bearer " + other.token())
+						.contentType(APPLICATION_JSON).content(json.formatted(otherType.getId())))
+				.andExpect(status().isCreated());
+		mockMvc.perform(post("/api/products/{id}/variants", id).header("Authorization", token)
+						.contentType(APPLICATION_JSON).content("{\"color\":\"Red\"}"))
+				.andExpect(status().isBadRequest());
+		mockMvc.perform(post("/api/products/{id}/variants", id).header("Authorization", token)
+						.contentType(APPLICATION_JSON).content("{}")).andExpect(status().isConflict());
+		String body = mockMvc.perform(get("/api/products/{id}/variants", id).header("Authorization", token))
+				.andReturn().getResponse().getContentAsString();
+		String variantId = JsonPath.read(body, "$.content[0].id");
+		mockMvc.perform(delete("/api/products/{id}/variants/{variantId}", id, variantId).header("Authorization", token))
+				.andExpect(status().isNoContent());
+		mockMvc.perform(post("/api/products/{id}/variants", id).header("Authorization", token)
+						.contentType(APPLICATION_JSON).content("{}")).andExpect(status().isConflict());
+		mockMvc.perform(delete("/api/products/{id}", id).header("Authorization", token)).andExpect(status().isNoContent());
+		mockMvc.perform(post("/api/products/{id}/variants/{variantId}/reactivate", id, variantId)
+				.header("Authorization", token)).andExpect(status().isConflict());
+	}
+
+	@Test
+	void productSkuShouldRemainUniqueUnderConcurrentWrites() throws Exception {
+		CatalogActor actor = catalogActor();
+		ItemType firstType = itemTypeService.create(actor.id(), new ItemTypeValues("First", false, false, null));
+		ItemType secondType = itemTypeService.create(actor.id(), new ItemTypeValues("Second", false, false, null));
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		try {
+			Future<Product> first = executor.submit(() -> createProductAfterStart(start, actor.id(), firstType.getId(), " SKU "));
+			Future<Product> second = executor.submit(() -> createProductAfterStart(start, actor.id(), secondType.getId(), "sku"));
+			start.countDown();
+			int created = 0;
+			int conflicts = 0;
+			for (Future<Product> result : List.of(first, second)) {
+				try {
+					assertNotNull(result.get(15, TimeUnit.SECONDS));
+					created++;
+				} catch (ExecutionException exception) {
+					assertInstanceOf(CatalogConflictException.class, exception.getCause());
+					conflicts++;
+				}
+			}
+			assertEquals(1, created);
+			assertEquals(1, conflicts);
+		} finally {
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
+	void productCreationAndTypeDeactivationMustNotBothSucceed() throws Exception {
+		CatalogActor actor = catalogActor();
+		ItemType type = itemTypeService.create(actor.id(), new ItemTypeValues("Simple", false, false, null));
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		try {
+			Future<Product> created = executor.submit(() -> createProductAfterStart(start, actor.id(), type.getId(), "race"));
+			Future<?> deactivated = executor.submit(() -> {
+				if (!start.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("Race did not start");
+				itemTypeService.delete(actor.id(), type.getId());
+				return null;
+			});
+			start.countDown();
+			boolean productSucceeded;
+			try {
+				created.get(15, TimeUnit.SECONDS);
+				productSucceeded = true;
+			} catch (ExecutionException exception) {
+				assertInstanceOf(ItemTypeNotFoundException.class, exception.getCause());
+				productSucceeded = false;
+			}
+			boolean deleteSucceeded;
+			try {
+				deactivated.get(15, TimeUnit.SECONDS);
+				deleteSucceeded = true;
+			} catch (ExecutionException exception) {
+				assertInstanceOf(CatalogConflictException.class, exception.getCause());
+				deleteSucceeded = false;
+			}
+			assertNotEquals(productSucceeded, deleteSucceeded);
+		} finally {
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
+	void productAndHistoryShouldRollbackTogether() {
+		CatalogActor actor = catalogActor();
+		ItemType type = itemTypeService.create(actor.id(), new ItemTypeValues("Simple", false, false, null));
+		jdbcTemplate.execute("""
+				CREATE OR REPLACE FUNCTION commerce_test_fail_product_history()
+				RETURNS trigger LANGUAGE plpgsql AS $$
+				BEGIN
+					IF NEW.new_value = 'force-product-history-failure' THEN
+						RAISE EXCEPTION 'Simulated product history failure';
+					END IF;
+					RETURN NEW;
+				END;
+				$$
+				""");
+		jdbcTemplate.execute("""
+				CREATE TRIGGER commerce_test_fail_product_history
+				BEFORE INSERT ON catalog_product_history
+				FOR EACH ROW EXECUTE FUNCTION commerce_test_fail_product_history()
+				""");
+		try {
+			ProductRequest request = new ProductRequest(type.getId(), "force-product-history-failure", "Test",
+					"Test", BigDecimal.TEN, List.of(new VariantRequest(null, null, null)));
+			assertThrows(DataAccessException.class, () -> productService.create(actor.id(), request));
+			assertEquals(0, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM catalog_products WHERE sku = ?",
+					Integer.class, "force-product-history-failure"));
+		} finally {
+			jdbcTemplate.execute("DROP TRIGGER commerce_test_fail_product_history ON catalog_product_history");
+			jdbcTemplate.execute("DROP FUNCTION commerce_test_fail_product_history()");
+		}
+	}
+
+	private Product createProductAfterStart(CountDownLatch start, UUID actor, UUID type, String sku) throws InterruptedException {
+		if (!start.await(10, TimeUnit.SECONDS)) {
+			throw new IllegalStateException("Concurrent product writes did not start");
+		}
+		return productService.create(actor, new ProductRequest(type, sku, "Product", "Description", BigDecimal.TEN,
+				List.of(new VariantRequest(null, null, null))));
+	}
+
+	private record CatalogActor(UUID id, String token) {
+	}
+
+	private String tokenWithClaims(UUID subject, UUID merchantId) {
+		Instant now = Instant.now();
+		JwtClaimsSet claims = JwtClaimsSet.builder().issuer("commerce-platform")
+				.subject(subject.toString()).issuedAt(now).expiresAt(now.plusSeconds(60))
+				.claim("merchant_id", merchantId.toString()).build();
+		return jwtEncoder.encode(JwtEncoderParameters.from(JwsHeader.with(MacAlgorithm.HS256).build(), claims))
+				.getTokenValue();
+	}
+
+	private CatalogActor catalogActor() {
+		String email = uniqueEmail();
+		String password = "a-strong-local-password";
+		registerMerchant.execute(new RegisterMerchantCommand("Merchant", "Store", uniqueSubdomain(), email, password));
+		UUID id = merchantAccountRepository.findByEmail(email).orElseThrow().getId();
+		return new CatalogActor(id, authenticateMerchant.execute(email, password).accessToken());
+	}
+
+	private ItemType createItemAfterStart(CountDownLatch start, UUID actorId, String name) throws InterruptedException {
+		if (!start.await(10, TimeUnit.SECONDS)) {
+			throw new IllegalStateException("Concurrent item type writes did not start");
+		}
+		return itemTypeService.create(actorId, new ItemTypeValues(name, true, true, SizeFormat.LETTER));
 	}
 
 	@Test
