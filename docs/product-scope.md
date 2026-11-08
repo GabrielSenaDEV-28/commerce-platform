@@ -242,21 +242,19 @@ and dimensions up to two. The variant response includes these values under
 measurements until configured. Updates are recorded in product history.
 Missing measurements will prevent shipping quotes when quoting is implemented.
 
-Pickup is free and uses the same address as the shipping origin. Customer-facing
-shipping quotes and end-to-end carrier integration remain future work.
+Pickup is free and uses the same address as the shipping origin.
 
 The internal Melhor Envio quotation client is prepared for sandbox only.
 It sends origin and destination postal codes and unit product data, rounding
 each dimension up to whole centimeters without changing the catalog. It uses
 the provider's customized price and delivery time and retains Correios
-services. Provider failures and individual unavailable services are distinct;
-the quotation client is not yet connected to an endpoint or checkout.
+services. Provider failures and individual unavailable services are distinct.
 **Pending sandbox validation:** Create a sandbox account and application,
 configure the callback and credentials securely, and validate the OAuth
 authorization, token renewal and quotation against the real sandbox. This
 work is deferred until after this initial implementation is merged. The
-quotation client is not yet connected to the stored merchant authorization, so
-an end-to-end quotation flow must be implemented or tested separately.
+quotation endpoints use the stored merchant authorization, but an end-to-end
+quotation flow still needs real sandbox validation.
 Simulated provider responses do not establish sandbox compatibility; do not
 enable this integration for production before validating it and addressing
 any provider-specific requirements.
@@ -297,9 +295,42 @@ uncertain, the store must reconnect rather than retrying a possibly consumed
 token. An interrupted process can leave status `REFRESHING`; disconnect and
 reconnect to recover. Disconnect removes local credentials but does not revoke
 the application at Melhor Envio. Starting a new connection replaces any
-existing local connection. The integration does not yet invoke this token
-service for quotations and cannot validate the real provider until the sandbox
-application is configured.
+existing local connection. Validation against the real provider remains
+pending until the sandbox application is configured.
+
+#### Shipping estimates
+
+The public API uses the storefront hostname to select the store.
+`POST /api/public/catalog/products/{productId}/variants/{variantId}/shipping-estimates`
+accepts `{"postalCode":"96020360","quantity":2}`. `POST
+/api/public/cart/shipping-estimates` accepts `{"postalCode":"96020360"}` and
+requires the cart's `Cart-Token` header. Postal codes must have eight digits;
+quantity must be a positive integer. No customer authentication is required.
+
+The server obtains origin, current prices, dimensions, quantities and the
+store's authorization itself. A successful response contains `quotes` and
+`unavailable` arrays of Correios services. Each quote contains `id`, `name`,
+`price` in BRL and `deliveryDays`; unavailable entries contain `id` and `name`.
+Responses are `Cache-Control: no-store`. These are estimates, not guaranteed
+prices or stock reservations. Values, stock, cart contents and settings can
+change during or after a request. A cart with an active reservation can show
+items as unavailable because its reserved stock is not available for new
+reservations.
+
+An empty cart or missing origin returns `409`. If any requested item is
+inactive, has insufficient stock or lacks shipping measurements, no partial
+quotation is sent: the `409` response contains `code: ITEMS_NOT_QUOTABLE` and
+an `items` array with `productId`, `variantId` and `reasons` (`UNAVAILABLE`
+and/or `MISSING_MEASUREMENTS`). Invalid input returns `400`; a foreign or
+unknown product, variant or cart returns `404`. Integration errors, including
+missing authorization, are reported as `503` with
+`SHIPPING_TEMPORARILY_UNAVAILABLE`; they do not mean the service is free.
+
+The checkout does not consume these estimates: shipment selection and a fresh
+quote for the reserved items remain future work. The provider client currently
+targets sandbox only; no real sandbox validation has been completed. The
+public endpoints have no rate limiting, so abuse prevention and traffic limits
+are required before production exposure.
 
 #### Inventory
 
