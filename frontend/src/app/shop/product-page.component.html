@@ -1,0 +1,25 @@
+<div class="shop-page">
+  <header class="shop-header"><a class="brand" routerLink="/">c. <span>commerce</span></a><nav aria-label="Navegação da loja">
+    <a [routerLink]="auth.accountKind() === 'merchant' ? '/painel/perfil' : auth.accountKind() === 'customer' ? '/conta/perfil' : '/entrar'">{{ auth.accountKind() === 'merchant' ? 'Administração' : auth.accountKind() === 'customer' ? 'Minha conta' : 'Entrar' }}</a>
+    <a routerLink="/carrinho" [attr.aria-label]="'Sacola com ' + cart.count() + ' itens'">Sacola ({{ cart.count() }})</a>
+  </nav></header>
+  <main class="shop-wrap">
+    <nav class="breadcrumbs" aria-label="Navegação estrutural"><a routerLink="/">Início</a><span>/</span><span aria-current="page">{{ product()?.name ?? 'Produto' }}</span></nav>
+    @if (loading()) { <div class="product-layout skeleton" role="status" aria-label="Carregando produto"><div class="skeleton-image shimmer"></div><div><div class="skeleton-line shimmer"></div><div class="skeleton-line shimmer"></div><div class="skeleton-image shimmer"></div></div></div> }
+    @if (error()) { <section class="empty"><h1>Produto indisponível</h1><p class="field-error">{{ error() }}</p><div class="actions"><button type="button" (click)="load()">Tentar novamente</button><a routerLink="/">Voltar à loja</a></div></section> }
+    @if (product(); as item) {
+      <div class="product-layout">
+        <section class="gallery" aria-label="Fotos do produto">
+          <app-product-gallery [photos]="item.photos" [name]="item.name" />
+          <section class="description"><span class="overline">CADA DETALHE IMPORTA</span><h2>Sobre o produto</h2><p>{{ item.description }}</p></section>
+        </section>
+        <section class="product-summary"><span class="overline">ESCOLHIDO PARA VOCÊ</span><h1>{{ item.name }}</h1><p class="muted">Escolha a combinação que mais combina com você.</p>
+          <app-copy-link [path]="productPath" label="Copiar link do produto" />
+          <app-purchase-options [product]="item" />
+          <details class="payment-info"><summary>Opções de pagamento</summary><p>Pagamentos e parcelamento ainda não estão disponíveis nesta versão. Nenhuma cobrança será feita ao adicionar produtos à sacola.</p></details>
+        </section>
+      </div>
+    }
+  </main>
+  <footer class="shop-footer">commerce. · Uma loja feita para você.</footer>
+</div>

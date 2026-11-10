@@ -1,0 +1,118 @@
+<div class="account">
+  <header class="header">
+    <a class="brand" routerLink="/"> <span>c.</span> commerce</a>
+    <a class="back" routerLink="/">← Voltar para a loja</a>
+  </header>
+  <main class="wrap">
+    <nav class="crumb" aria-label="Você está aqui"><a routerLink="/">Início</a><span>/</span><span aria-current="page">Minha conta</span></nav>
+    <div class="heading"><span class="overline">SEU ESPAÇO</span><h1>Minha conta<span>.</span></h1><p>Seus dados e suas compras, tudo em um só lugar.</p></div>
+    <div class="layout">
+      <aside class="sidebar">
+        <p>GERENCIAR CONTA</p>
+        <nav aria-label="Menu da conta">
+          @for (item of [{id: 'perfil', label: 'Dados pessoais'}, {id: 'enderecos', label: 'Endereços'}, {id: 'pedidos', label: 'Meus pedidos'}]; track item.id) {
+            @if (busy()) { <span class="nav-disabled">{{ item.label }}</span> }
+            @else { <a [routerLink]="['/conta', item.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ item.label }} <span>›</span></a> }
+          }
+        </nav>
+        <details class="future-features"><summary>Em breve</summary><p>Recursos ainda indisponíveis.</p><nav aria-label="Recursos futuros da conta">
+          @for (item of [{id: 'pagamentos', label: 'Formas de pagamento'}, {id: 'seguranca', label: 'Segurança e acesso'}]; track item.id) {
+            @if (busy()) { <span class="nav-disabled">{{ item.label }}</span> }
+            @else { <a [routerLink]="['/conta', item.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ item.label }} <small>Em breve</small></a> }
+          }
+        </nav></details>
+        <button class="signout" type="button" (click)="logout()" [disabled]="busy()">{{ busy() ? 'Aguarde...' : 'Sair da conta' }}</button>
+        <small>Sua sessão é mantida apenas nesta página e será perdida ao atualizar.</small>
+      </aside>
+      <section class="panel">
+        @if (error()) { <div class="message error" role="alert">{{ error() }} @if (expired()) { <button type="button" (click)="logout()" [disabled]="busy()">Sair da sessão</button> }</div> }
+        @if (success()) { <div class="message success" role="status">{{ success() }}</div> }
+        @if (loading()) {
+          <div class="loading" role="status"><span>Carregando seus dados...</span><div></div><div></div><div></div></div>
+        } @else if (section() === 'perfil') {
+          <div class="panel-title"><span class="overline">SOBRE VOCÊ</span><h2>Dados pessoais</h2><p>Mantenha suas informações atualizadas para seus pedidos.</p></div>
+          @if (profile(); as info) {
+            @if (!editingProfile()) {
+              <app-record-card [staticCard]="true" label="Dados pessoais"><h3>{{ info.name }}</h3><p>{{ info.email }}</p><p>{{ info.phone || 'Telefone não informado' }}</p>
+                <button recordActions type="button" [disabled]="busy() || expired()" (click)="editingProfile.set(true)">Editar dados pessoais</button></app-record-card>
+            } @else {
+            <form [attr.inert]="busy() ? '' : null" [formGroup]="profileForm" (ngSubmit)="saveProfile()" novalidate>
+              <label for="profile-name">Nome completo</label><input id="profile-name" formControlName="name" autocomplete="name" [attr.aria-invalid]="profileForm.controls.name.touched && profileForm.controls.name.invalid" />
+              @if (profileForm.controls.name.touched && profileForm.controls.name.invalid) { <span class="field-error">Informe um nome com até 150 caracteres.</span> }
+              <label for="profile-email">E-mail</label><input id="profile-email" [value]="info.email" readonly aria-describedby="email-note" /><small id="email-note">A alteração de e-mail ainda não está disponível.</small>
+              <label for="profile-phone">Telefone com DDD</label><input id="profile-phone" formControlName="phone" inputmode="numeric" autocomplete="tel" placeholder="11987654321" [attr.aria-invalid]="profileForm.controls.phone.touched && profileForm.controls.phone.invalid" />
+              @if (profileForm.controls.phone.touched && profileForm.controls.phone.invalid) { <span class="field-error">Informe 10 ou 11 dígitos, incluindo o DDD.</span> }
+              <small>Use somente números. O telefone é necessário para criar pedidos.</small>
+              <button class="primary" type="submit" [disabled]="busy() || expired()">{{ busy() ? 'Salvando...' : 'Salvar alterações' }}</button>
+            </form>
+            }
+          } @else if (error() && !expired()) { <button class="secondary" type="button" (click)="retry()">Tentar novamente</button> }
+        } @else if (section() === 'enderecos') {
+          <div class="panel-title"><span class="overline">ONDE VOCÊ ESTÁ</span><h2>Meus endereços</h2><p>Cadastre até 10 endereços de entrega no Brasil.</p></div>
+          @if (editingAddress()) {
+            <form [attr.inert]="busy() ? '' : null" [formGroup]="addressForm" (ngSubmit)="saveAddress()" novalidate>
+              <h3>{{ editId() ? 'Editar endereço' : 'Novo endereço' }}</h3>
+              <label for="recipient">Destinatário</label><input id="recipient" formControlName="recipient" autocomplete="name" />
+              @if (addressForm.controls.recipient.touched && addressForm.controls.recipient.invalid) { <span class="field-error">Informe o destinatário com até 150 caracteres.</span> }
+              <label for="postal">CEP</label><input id="postal" formControlName="postalCode" inputmode="numeric" autocomplete="postal-code" placeholder="Somente 8 números" />
+              @if (addressForm.controls.postalCode.touched && addressForm.controls.postalCode.invalid) { <span class="field-error">Informe um CEP com 8 números.</span> }
+              <label for="street">Rua</label><input id="street" formControlName="street" autocomplete="address-line1" />
+              @if (addressForm.controls.street.touched && addressForm.controls.street.invalid) { <span class="field-error">Informe a rua com até 150 caracteres.</span> }
+              <label for="number">Número</label><input id="number" formControlName="number" />
+              @if (addressForm.controls.number.touched && addressForm.controls.number.invalid) { <span class="field-error">Informe o número com até 30 caracteres.</span> }
+              <label for="complement">Complemento <span class="optional">(opcional)</span></label><input id="complement" formControlName="complement" autocomplete="address-line2" />
+              @if (addressForm.controls.complement.touched && addressForm.controls.complement.invalid) { <span class="field-error">Use até 150 caracteres no complemento.</span> }
+              <label for="district">Bairro</label><input id="district" formControlName="district" />
+              @if (addressForm.controls.district.touched && addressForm.controls.district.invalid) { <span class="field-error">Informe o bairro com até 100 caracteres.</span> }
+              <label for="city">Cidade</label><input id="city" formControlName="city" autocomplete="address-level2" />
+              @if (addressForm.controls.city.touched && addressForm.controls.city.invalid) { <span class="field-error">Informe a cidade com até 100 caracteres.</span> }
+              <label for="state">Estado</label><select id="state" formControlName="state" autocomplete="address-level1"><option value="">Selecione</option>@for (state of states; track state) { <option [value]="state">{{ state }}</option> }</select>
+              @if (addressForm.controls.state.touched && addressForm.controls.state.invalid) { <span class="field-error">Selecione um estado válido.</span> }
+              <div class="actions"><button class="primary" type="submit" [disabled]="busy() || expired()">{{ busy() ? 'Salvando...' : 'Salvar endereço' }}</button><button class="secondary" type="button" [disabled]="busy()" (click)="cancelAddress()">Cancelar</button></div>
+            </form>
+          } @else {
+            @if (addresses().length === 0 && !error()) { <div class="empty"><span>⌂</span><h3>Nenhum endereço cadastrado</h3><p>Adicione um endereço para usar em seus pedidos.</p></div> }
+            @for (address of addresses(); track address.id) {
+              <app-record-card [staticCard]="true" [label]="'Endereço de ' + address.recipient"><h3>{{ address.recipient }}</h3><p>{{ address.street }}, {{ address.number }} @if (address.complement) { · {{ address.complement }} }<br>{{ address.district }} · {{ address.city }}/{{ address.state }}<br>CEP {{ address.postalCode }}</p>
+                <div recordActions>
+                @if (deletingId() === address.id) {
+                  <p>Deseja remover este endereço?</p><div class="actions"><button class="text-button danger" type="button" [disabled]="busy()" (click)="deleteAddress(address.id)">Confirmar remoção</button><button class="text-button" type="button" [disabled]="busy()" (click)="deletingId.set(null)">Cancelar</button></div>
+                } @else {
+                  <div class="actions"><button class="text-button" type="button" [disabled]="busy() || expired()" (click)="startAddress(address)">Editar</button><button class="text-button danger" type="button" [disabled]="busy() || expired()" (click)="deletingId.set(address.id)">Remover</button></div>
+                }
+                </div>
+              </app-record-card>
+            }
+            @if (!error()) { <button class="primary" type="button" [disabled]="addresses().length >= 10 || expired()" (click)="startAddress()">+ Adicionar endereço</button> }
+            @else if (!expired()) { <button class="secondary" type="button" (click)="retry()">Tentar novamente</button> }
+          }
+        } @else if (section() === 'pedidos') {
+          <div class="panel-title"><span class="overline">SUAS COMPRAS</span><h2>Meus pedidos</h2><p>Acompanhe os pedidos feitos nesta loja.</p></div>
+          @if (orders(); as page) {
+            @if (page.content.length === 0) {
+              <div class="empty"><span>◇</span>
+                @if (page.page > 0) {
+                  <h3>Não há pedidos nesta página</h3><p>A lista pode ter mudado.</p>
+                  <button class="secondary" type="button" (click)="loadOrders(0)">Voltar à primeira página</button>
+                } @else {
+                  <h3>Nenhum pedido por aqui</h3><p>Quando você fizer um pedido, ele aparecerá nesta página.</p><a routerLink="/">Explorar a loja →</a>
+                }
+              </div>
+            }
+            @for (order of page.content; track order.id) {
+              <app-record-card [staticCard]="true" [label]="'Pedido ' + order.id"><strong>Pedido {{ order.id }}</strong><p>{{ order.createdAt | date:'dd/MM/yyyy HH:mm' }} · {{ order.fulfillmentType === 'PICKUP' ? 'Retirada' : 'Entrega' }}</p><p><span class="status">{{ order.status === 'PENDING' ? 'Pendente' : order.status === 'EXPIRED' ? 'Expirado' : order.status === 'CANCELLED' ? 'Cancelado' : order.status }}</span> · {{ order.total | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</p></app-record-card>
+            }
+            @if (page.totalPages > 1) { <div class="actions pagination"><button class="secondary" type="button" [disabled]="page.page === 0" (click)="loadOrders(page.page - 1)">Anterior</button><span>Página {{ page.page + 1 }} de {{ page.totalPages }}</span><button class="secondary" type="button" [disabled]="page.page + 1 >= page.totalPages" (click)="loadOrders(page.page + 1)">Próxima</button></div> }
+          } @else if (error() && !expired()) { <button class="secondary" type="button" (click)="retry()">Tentar novamente</button> }
+        } @else if (section() === 'pagamentos') {
+          <div class="panel-title"><span class="overline">EM BREVE</span><h2>Formas de pagamento</h2><p>O cadastro de formas de pagamento ainda não está disponível.</p></div>
+          <div class="empty"><span>◇</span><h3>Estamos preparando esta área</h3><p>Não é possível cadastrar cartões ou realizar pagamentos nesta versão.</p></div>
+        } @else {
+          <div class="panel-title"><span class="overline">PROTEJA SUA CONTA</span><h2>Segurança e acesso</h2><p>Gerencie suas credenciais quando estas funcionalidades estiverem disponíveis.</p></div>
+          <div class="feature"><div><strong>Alterar e-mail</strong><p>Atualização de e-mail ainda não disponível.</p></div><span>EM BREVE</span></div>
+          <div class="feature"><div><strong>Alterar senha</strong><p>Alteração e recuperação de senha ainda não disponíveis.</p></div><span>EM BREVE</span></div>
+        }
+      </section>
+    </div>
+  </main>
+</div>

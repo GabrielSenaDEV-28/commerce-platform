@@ -1,0 +1,64 @@
+<main class="page">
+  <section class="intro" aria-label="Apresentação">
+    <a class="brand" [routerLink]="isMerchant() ? '/painel/login' : '/entrar'"><span class="brand-mark">C</span> Commerce</a>
+    <div class="intro-content">
+      <span class="eyebrow">{{ isMerchant() ? 'CADASTRO DE LOJISTA' : 'CADASTRO DE CLIENTE' }}</span>
+      <h1>{{ isMerchant() ? 'Comece sua loja.' : 'Crie sua conta nesta loja.' }}</h1>
+      <p>{{ isMerchant() ? 'Cadastre sua conta e crie sua loja em uma etapa.' : 'Sua conta será vinculada à loja deste endereço.' }}</p>
+    </div>
+    <span class="intro-footer">Commerce Platform</span>
+  </section>
+  <section class="content" aria-labelledby="register-title">
+    <div class="card">
+      @if (auth.accountKind()) {
+        <h2 id="register-title">Você já está conectado</h2>
+        <p>Encerre sua sessão antes de criar outra conta.</p>
+        <a [routerLink]="auth.accountKind() === 'merchant' ? '/painel/login' : '/entrar'">Voltar para a sessão</a>
+      } @else if (complete()) {
+        <h2 id="register-title">Cadastro concluído!</h2>
+        <p>Sua conta foi criada. Entre com seu e-mail e senha para continuar.</p>
+        @if (isMerchant() && storeAddress(); as address) {
+          <p>Endereço local da sua loja: <a [href]="address + '/'">{{ address }}/</a>.</p>
+          <p>Login de clientes: <a [href]="address + '/entrar'">{{ address }}/entrar</a>.</p>
+          <p>Cadastro de clientes: <a [href]="address + '/cadastro'">{{ address }}/cadastro</a>.</p>
+        }
+        @if (isMerchant() && storeAddress(); as address) { <p>Redirecionando para sua loja...</p><a [href]="address + '/entrar'">Continuar para o login da loja</a> }
+        @else { <a routerLink="/entrar">Ir para o login</a> }
+        @if (!isMerchant()) { <p class="note"><a routerLink="/">Visitar a loja</a></p> }
+      } @else {
+        <span class="eyebrow">{{ isMerchant() ? 'PARA LOJISTAS' : 'PARA CLIENTES' }}</span>
+        <h2 id="register-title">{{ isMerchant() ? 'Cadastre sua loja' : 'Cadastre-se nesta loja' }}</h2>
+        @if (!isMerchant()) {
+          <p>Use o endereço da loja em que deseja se cadastrar.</p>
+        }
+        <form [attr.inert]="loading() ? '' : null" [formGroup]="form" (ngSubmit)="submit()" novalidate>
+          <label for="name">{{ isMerchant() ? 'Nome do lojista' : 'Seu nome' }}</label>
+          <input id="name" formControlName="name" autocomplete="name" [attr.aria-invalid]="form.controls.name.touched && form.controls.name.invalid" />
+          @if (form.controls.name.touched && form.controls.name.invalid) { <span class="field-error">Informe um nome com até 150 caracteres.</span> }
+          @if (isMerchant()) {
+            <label for="storeName">Nome da loja</label>
+            <input id="storeName" formControlName="storeName" [attr.aria-invalid]="form.controls.storeName.touched && form.controls.storeName.invalid" />
+            @if (form.controls.storeName.touched && form.controls.storeName.invalid) { <span class="field-error">Informe o nome da loja.</span> }
+            <label for="subdomain">Endereço da loja</label>
+            <input id="subdomain" formControlName="subdomain" autocomplete="off" placeholder="minha-loja" [attr.aria-invalid]="form.controls.subdomain.touched && form.controls.subdomain.invalid" aria-describedby="subdomain-help" />
+            <span class="field-help" id="subdomain-help">Use letras, números e hífens, sem hífen nas extremidades (até 63 caracteres).</span>
+            @if (form.controls.subdomain.touched && form.controls.subdomain.invalid) { <span class="field-error">Informe um endereço válido para a loja.</span> }
+          }
+          <label for="email">E-mail</label>
+          <input id="email" type="email" formControlName="email" autocomplete="email" [attr.aria-invalid]="form.controls.email.touched && form.controls.email.invalid" />
+          @if (form.controls.email.touched && form.controls.email.invalid) { <span class="field-error">{{ form.controls.email.hasError('conflict') ? 'Este e-mail já pertence a uma conta nesta loja.' : 'Informe um e-mail válido.' }}</span> }
+          <label for="password">Senha</label>
+          <input id="password" type="password" formControlName="password" autocomplete="new-password" [attr.aria-invalid]="form.controls.password.touched && form.controls.password.invalid" aria-describedby="password-help" />
+          <span class="field-help" id="password-help">Use de 12 a 128 caracteres.</span>
+          @if (form.controls.password.touched && form.controls.password.invalid) { <span class="field-error">Informe uma senha válida.</span> }
+          <label for="confirmPassword">Confirme a senha</label>
+          <input id="confirmPassword" type="password" formControlName="confirmPassword" autocomplete="new-password" [attr.aria-invalid]="form.controls.confirmPassword.touched && (form.controls.confirmPassword.invalid || form.controls.password.value !== form.controls.confirmPassword.value)" />
+          @if (form.controls.confirmPassword.touched && (form.controls.confirmPassword.invalid || form.controls.password.value !== form.controls.confirmPassword.value)) { <span class="field-error">As senhas devem ser iguais.</span> }
+          <button type="submit" class="button" [disabled]="loading()">{{ loading() ? 'Cadastrando...' : 'Criar conta' }}</button>
+        </form>
+        <p class="note">Já tem conta? <a [routerLink]="isMerchant() ? '/painel/login' : '/entrar'">Faça login</a>.</p>
+      }
+      @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
+    </div>
+  </section>
+</main>

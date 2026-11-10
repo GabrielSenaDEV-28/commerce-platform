@@ -13,11 +13,14 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api/public/customer-auth")
@@ -33,6 +36,12 @@ public class CustomerAuthController {
     public record Registration(@NotBlank @Size(max = 150) String name,
                                @NotBlank @Email @Size(max = 320) String email,
                                @NotBlank @Size(min = 12, max = 128) String password) { }
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ProblemDetail> handleStatus(ResponseStatusException exception) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(exception.getStatusCode(), exception.getReason());
+        return ResponseEntity.status(exception.getStatusCode()).cacheControl(CacheControl.noStore()).body(problem);
+    }
 
     @PostMapping("/register")
     public ResponseEntity<Customer> register(HttpServletRequest request, @Valid @RequestBody Registration body) {
