@@ -1,0 +1,111 @@
+<div class="storefront">
+  <div class="announcement">BEM-VINDO À NOSSA LOJA <span aria-hidden="true">✦</span> ENCONTRE SEU PRÓXIMO FAVORITO</div>
+  <header class="header">
+    <div class="header-inner">
+      <a class="wordmark" routerLink="/" aria-label="Commerce, início da loja"><span class="mark">c.</span><span>commerce<small> SUA LOJA ONLINE</small></span></a>
+      <nav class="desktop-nav" aria-label="Navegação principal">
+        <a href="#colecao">Explorar produtos</a>
+        <span class="muted-nav">Categorias <small>em breve</small></span>
+      </nav>
+      <div class="header-actions">
+        @if (auth.accountKind() === 'merchant') {
+          <a class="icon-action" routerLink="/painel/perfil" aria-label="Administração da loja"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 10h16v10H4zM3 10l2-6h14l2 6M9 20v-6h6v6"/></svg><span>Administração</span></a>
+        } @else {
+        <a class="icon-action" [routerLink]="auth.accountKind() === 'customer' ? '/conta/perfil' : '/entrar'" [attr.aria-label]="auth.accountKind() === 'customer' ? 'Minha conta' : 'Entrar na minha conta'">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="8" r="3.3"/><path d="M5 20c0-3.5 2.8-5.8 7-5.8s7 2.3 7 5.8"/></svg>
+          <span>{{ auth.accountKind() === 'customer' ? 'Minha conta' : 'Entrar' }}</span>
+        </a>
+        }
+        <a class="icon-action" routerLink="/carrinho" [attr.aria-label]="'Sacola com ' + cart.count() + ' itens'">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 8h14l1 12H4L5 8Z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/></svg><span>Sacola ({{ cart.count() }})</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <nav class="breadcrumbs wrap" aria-label="Você está aqui"><span aria-current="page">Início</span><span aria-hidden="true">/</span><span>Produtos</span></nav>
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <span class="overline"><span class="dot"></span> FEITO PARA VOCÊ</span>
+        <h1 id="hero-title">Encontre beleza<br>nos <em>detalhes.</em></h1>
+        <p>Uma seleção especial para acompanhar você em todos os momentos.</p>
+        <a class="hero-link" href="#colecao">Explorar a coleção <span aria-hidden="true">↗</span></a>
+      </div>
+      <div class="hero-art" aria-hidden="true"><div class="art-ring"></div><div class="art-shape"></div><span class="art-label">ESCOLHAS QUE<br>INSPIRAM.</span><span class="art-star">✳</span></div>
+      <div class="hero-index" aria-hidden="true">01 / 01</div>
+    </section>
+
+    <section class="collection wrap" id="colecao" aria-labelledby="collection-title">
+      <div class="section-heading">
+        <div><span class="overline">DESCUBRA A COLEÇÃO</span><h2 id="collection-title">Nossos produtos<span>.</span></h2><p>Peças para encontrar, escolher e chamar de suas.</p></div>
+        @if (!loading() && catalog(); as result) {
+          <span class="count">{{ result.totalElements }} {{ result.totalElements === 1 ? 'produto' : 'produtos' }}</span>
+        }
+      </div>
+      <div class="catalog-layout">
+        <aside class="filters" aria-label="Filtros de produtos">
+          <div class="filter-title">Filtros <span aria-hidden="true">+</span></div>
+          <div class="filter-group"><strong>Categorias</strong><span class="soon">EM BREVE</span></div>
+          <p>O filtro por categorias estará disponível em uma próxima versão.</p>
+          <button type="button" disabled>Selecionar categoria</button>
+          <div class="filter-divider"></div>
+          <div class="filter-group"><strong>Configurações</strong><span class="soon">EM BREVE</span></div>
+          <p>Mais opções para personalizar sua experiência estão a caminho.</p>
+        </aside>
+        <div class="catalog-content" aria-live="polite" [attr.aria-busy]="loading()">
+          @if (loading()) {
+            <p class="sr-only" role="status">Carregando produtos...</p>
+            <div class="product-grid skeleton-grid" aria-hidden="true">
+              @for (item of [1, 2, 3]; track item) {
+                <div class="skeleton-card" aria-hidden="true"><div class="skeleton-image shimmer"></div><div class="skeleton-line shimmer"></div><div class="skeleton-line short shimmer"></div></div>
+              }
+            </div>
+          } @else if (error()) {
+            <div class="empty-state" role="alert"><div class="empty-symbol">!</div><h3>Algo não saiu como esperado</h3><p>{{ error() }}</p><button class="retry" type="button" (click)="load(page())">Tentar novamente</button></div>
+          } @else if (catalog(); as result) {
+            @if (result.content.length === 0) {
+              <div class="empty-state"><div class="empty-symbol" aria-hidden="true">✳</div><span class="overline">UM NOVO COMEÇO</span>
+                @if (result.page > 0) {
+                  <h3>Não há produtos nesta página.</h3><p>O catálogo pode ter mudado desde sua última visita.</p>
+                  <button class="retry" type="button" (click)="load(0)">Voltar para a primeira página</button>
+                } @else {
+                  <h3>Tem novidade chegando por aqui.</h3><p>Esta loja ainda não tem produtos disponíveis. Volte mais tarde para conhecer a coleção.</p>
+                }
+              </div>
+            } @else {
+              <div class="product-grid">
+                @for (product of result.content; track product.id) {
+                  <article class="product-card">
+                    <a class="product-destination" [routerLink]="['/produtos', product.id]" [attr.aria-label]="'Ver ' + product.name"></a>
+                    <div class="product-image">
+                      @if (product.photos.length) { <img [src]="product.photos[0]" [alt]="product.name" loading="lazy" /> }
+                      @else { <span aria-label="Produto sem foto">✳</span> }
+                    </div>
+                    <div class="product-info"><h3>{{ product.name }}</h3><p>{{ product.description }}</p><strong>{{ product.price | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</strong><small>Preço padrão; variantes podem ter outro valor.</small></div>
+                    <button class="catalog-add" type="button" [disabled]="cart.busy()" (click)="openPurchase(product)">Adicionar ao carrinho</button>
+                  </article>
+                }
+              </div>
+              @if (result.totalPages > 1) {
+                <nav class="pagination" aria-label="Paginação de produtos">
+                  <button type="button" [disabled]="result.page === 0" (click)="load(result.page - 1)">← Anterior</button>
+                  <span>Página {{ result.page + 1 }} de {{ result.totalPages }}</span>
+                  <button type="button" [disabled]="result.page + 1 >= result.totalPages" (click)="load(result.page + 1)">Próxima →</button>
+                </nav>
+              }
+            }
+          }
+        </div>
+      </div>
+    </section>
+  </main>
+  <dialog #quickBuy aria-labelledby="quick-buy-title" (cancel)="closePurchase($event)" (close)="buying.set(null)">
+    @if (buying(); as product) {
+      <div class="dialog-heading"><div><span class="overline">ESCOLHA SEU FAVORITO</span><h2 id="quick-buy-title">{{ product.name }}</h2></div><button type="button" aria-label="Fechar seleção" [disabled]="cart.busy()" (click)="closePurchase()">✕</button></div>
+      @defer (when buying()) { <app-purchase-options [product]="product" [showShipping]="false" /> }
+      <a [routerLink]="['/produtos', product.id]">Ver fotos e detalhes do produto</a>
+    }
+  </dialog>
+  <footer class="footer"><div class="wrap footer-inner"><div><strong>commerce<span>.</span></strong><p>Uma loja feita para você.</p></div><p>Uma experiência em construção, com carinho.</p></div></footer>
+</div>

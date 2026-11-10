@@ -1,0 +1,56 @@
+:host { display: block; min-height: 100vh; background: #f7f8f4; color: #263d36; }
+.header { background: white; border-bottom: 1px solid #e8ece6; min-height: 76px; padding: 0 max(24px, calc((100% - 1200px) / 2)); display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.brand { color: #263d36; font: bold 1.65rem Georgia, serif; text-decoration: none; letter-spacing: -.05em; display: flex; align-items: center; gap: 10px; }
+.brand span { background: #294b40; color: white; width: 38px; height: 38px; display: grid; place-items: center; border-radius: 50%; padding-bottom: 4px; font-size: 1.35rem; }
+.back, .crumb a { color: #557063; text-decoration: none; font-size: .8rem; }
+.wrap { width: min(1200px, calc(100% - 48px)); margin: auto; padding-bottom: 90px; }
+.crumb { display: flex; gap: 12px; color: #89978d; font-size: .78rem; margin: 28px 0 42px; }
+.overline, .sidebar > p { color: #809585; letter-spacing: .14em; font-weight: 750; font-size: .65rem; }
+.heading h1 { font: 400 clamp(2.4rem, 5vw, 3.6rem) Georgia, serif; letter-spacing: -.04em; margin: 12px 0 8px; }
+.heading h1 span { color: #9fb3a0; }
+.heading p, .panel-title p { color: #78877b; font-size: .87rem; line-height: 1.6; margin: 0; }
+.layout { display: grid; grid-template-columns: 235px minmax(0, 1fr); gap: 28px; margin-top: 40px; align-items: start; }
+.sidebar, .panel { background: #fff; border: 1px solid #e9eee7; }
+.sidebar { padding: 26px 18px; }
+.sidebar > p { margin: 0 12px 18px; }
+.sidebar nav { display: grid; gap: 3px; }
+.sidebar nav a, .nav-disabled { color: #627568; text-decoration: none; font-size: .84rem; padding: 13px 12px; display: flex; justify-content: space-between; }
+.nav-disabled { opacity: .5; }
+.sidebar nav a.active { color: #294b40; background: #edf3eb; font-weight: 700; }
+.signout { margin-top: 16px; width: 100%; text-align: left; }
+.sidebar small { display: block; margin: 12px; color: #87948a; font-size: .71rem; line-height: 1.5; }
+.panel { padding: 38px; min-height: 420px; }
+.panel-title { border-bottom: 1px solid #ebefea; padding-bottom: 26px; margin-bottom: 26px; }
+.panel-title h2 { font: 400 2rem Georgia, serif; margin: 10px 0; }
+form { max-width: 580px; display: flex; flex-direction: column; }
+form h3 { font: 1.3rem Georgia, serif; }
+label { font-size: .8rem; font-weight: 650; margin: 17px 0 8px; }
+input, select { width: 100%; }
+input[readonly] { background: #f7f8f5; color: #87948a; }
+form small, .optional { color: #8b988d; font-size: .73rem; margin-top: 7px; }
+.primary, .secondary { font-weight: 650; }
+.primary { align-self: flex-start; margin-top: 25px; }
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+.actions .secondary { margin-top: 25px; }
+.empty { padding: 48px 20px; text-align: center; background: #f8faf6; }
+.empty > span { display: inline-grid; place-items: center; background: #e8efe6; color: #79947e; border-radius: 50%; width: 52px; height: 52px; font-size: 1.6rem; }
+.empty h3 { font: 1.4rem Georgia, serif; margin: 18px 0 8px; }
+.empty p, .empty a, .feature p { color: #7a897d; font-size: .8rem; line-height: 1.6; }
+.empty a { color: #294b40; font-weight: 700; }
+.feature { border: 1px solid #e7ece5; padding: 20px; margin: 12px 0; }
+.danger { color: #a4524b; }
+.feature { display: flex; justify-content: space-between; gap: 20px; align-items: center; }
+.feature p { margin: 7px 0 0; }
+.status, .feature span { display: block; font-size: .65rem; background: #edf3eb; color: #54755a; padding: 6px 9px; margin-bottom: 10px; white-space: nowrap; }
+.pagination { margin-top: 20px; font-size: .8rem; }
+.pagination .secondary { margin: 0; }
+.message { padding: 14px; font-size: .83rem; margin-bottom: 24px; line-height: 1.5; }
+.message button { display: block; margin-top: 10px; }
+.error { color: #8c342d; background: #fbefed; }
+.success { color: #315d42; background: #ecf5eb; }
+.loading { color: #748a78; font-size: .85rem; }
+.loading div { height: 48px; margin-top: 20px; background: linear-gradient(90deg, #f0f3ed, #fafbf8, #f0f3ed); background-size: 200% 100%; animation: shimmer 1.4s infinite; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+@media (max-width: 720px) { .layout { grid-template-columns: 1fr; } .sidebar nav { grid-template-columns: repeat(2, 1fr); } .sidebar { padding: 20px; } .panel { padding: 24px; } .crumb { margin-bottom: 28px; } }
+@media (prefers-reduced-motion: reduce) { .loading div { animation: none; } }
+@media(max-width:480px) { .header { flex-wrap:wrap; padding:16px 20px; }.panel { padding:18px; }.wrap { width:calc(100% - 32px); } }

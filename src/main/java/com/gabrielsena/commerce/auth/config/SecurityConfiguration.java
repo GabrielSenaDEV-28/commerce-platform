@@ -2,6 +2,7 @@ package com.gabrielsena.commerce.auth.config;
 
 import com.nimbusds.jose.proc.SecurityContext;
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
+import jakarta.servlet.DispatcherType;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -68,7 +69,9 @@ public class SecurityConfiguration {
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(authorize -> authorize
+                        .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/merchants").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/public/store-auth/login").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/customer-auth/register",
                                 "/api/public/customer-auth/login", "/api/public/customer-auth/refresh",
                                 "/api/public/customer-auth/logout").permitAll()

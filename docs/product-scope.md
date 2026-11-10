@@ -91,6 +91,84 @@ browse the catalog, purchase products, and follow the lifecycle of their orders.
 14. After confirmation, the merchant fulfills the order and the customer can
     follow its delivery lifecycle.
 
+### Initial frontend (MVP)
+
+The Angular frontend provides initial merchant and customer registration and
+login screens and a storefront home with a paginated public product listing.
+Customer registration, login and storefront use the store's hostname.
+Tokens are held only in page memory;
+reloading requires a new login and automatic token renewal is not implemented.
+The interface clears expired sessions using the login response's lifetime or
+an authenticated 401, then returns to the appropriate login with a validated
+local destination. Expiration takes precedence over unsaved changes; no form
+drafts or authentication tokens are persisted for recovery.
+The customer account provides profile editing, address management, and an
+order list through existing authenticated APIs. Payment methods, email and
+password changes are explicitly unavailable and collect no payment credentials.
+Product cards open a public product page with a photo gallery, description,
+variant selection, effective variant prices, quantity validation and product
+shipping estimates by postal code. Quick add from the listing opens the same
+variant-selection component in a native modal dialog, without choosing an
+arbitrary variant. The shopping bag supports current prices, quantity changes,
+removal and cart shipping estimates through the existing public APIs.
+Cart credentials stay in origin-scoped page memory; reloading or closing the
+tab loses access, while navigating within the application preserves it.
+"Buy now" adds the selection and opens the bag review without clearing other
+items; it does not create an order or charge the customer. Checkout UI,
+payment and installments remain explicitly unavailable. Shipping estimates
+require configured shipping integration and variant measurements, do not
+reserve stock and are invalidated when their inputs change.
+Category filtering, storefront settings, sales dashboard and per-store branding
+configuration are future work. Promotions remain unimplemented: no artificial
+discount, crossed-out price, promotional modal or payment condition is shown.
+A future promotion feature must supply authoritative original/effective prices
+and validity before the UI displays those details automatically.
+See `frontend/README.md` for local setup, proxy requirements and interface decisions.
+
+The initial merchant interface is available on the store's local hostname and
+verifies ownership before presenting administration. It supports initial
+item-type and product management, variant creation, variant pricing, stock
+entries, paginated stock history, photo preview/upload/removal/cover selection
+and a paginated order list. Color and size suggestions
+can be added per store. Order filters remain outside that interface. Sales
+analytics, promotions, staff permissions and branding are not implemented.
+Editable forms warn before discarding changes, and writes block internal
+navigation until completion. Stock and price updates preserve other unsaved
+variant fields. Product/variant breadcrumbs and a dedicated not-found page
+complete navigation. The decisions and failure-recovery behavior are recorded
+in `frontend/README.md` under "Decisões de acabamento".
+
+### Frontend branch completion and next increments
+
+The current frontend finish includes mobile layout refinements, keyboard skip
+navigation to main content, touch targets, inline field-error associations and
+live cart-operation feedback. Product images have a reusable enlarged gallery
+with native modal focus handling, arrow-key navigation, Escape dismissal and
+explicit image-failure recovery. Store, login and product links can be copied
+with permission-aware confirmation and a manual-copy alternative.
+
+Unimplemented administration and account sections are grouped and labeled
+"Em breve" instead of appearing as completed operations. Existing routes remain
+available to explain limitations, without fake saves or sample production data.
+These changes do not introduce backend behavior.
+
+The next recommended functional increment is integrated checkout, including
+address, fulfillment, reservation and order creation; payment remains a separate
+provider integration. Search/filter/sort must cover the whole server-side catalog,
+not only a loaded page. Promotions need authoritative prices/validity, sales
+dashboards need server-side aggregates and staff management needs server-enforced
+permissions. A future customization preview may be prototyped separately with
+clearly labeled demonstration data, but cannot claim to save or publish without
+a backend contract. See `frontend/README.md` for the detailed interface decisions.
+
+### Local development infrastructure (planned)
+
+Docker and Docker Compose are planned for running PostgreSQL, the backend and
+the frontend together in development. This environment is not yet implemented;
+database persistence, secrets, and preservation of the store hostname through
+the frontend proxy must be addressed. Production deployment configuration is
+separate work.
+
 ### Merchant onboarding and local authentication API (MVP)
 
 Merchant self-registration is available through the public
@@ -136,6 +214,48 @@ share the proxy's limit unless trusted client-IP handling is designed and
 configured at the network boundary. Never trust headers supplied directly by
 clients. Limits are not protection against distributed attacks and may require
 tuning and additional edge-level abuse prevention before production.
+
+#### Unified store login
+
+The public `POST /api/public/store-auth/login` accepts `{"email":"owner@example.com",
+"password":"..."}` on the store hostname and returns a flat
+`{"accessToken":"...","refreshToken":"...","tokenType":"Bearer","expiresIn":900,
+"accountKind":"merchant"}` response. `accountKind` is exactly `merchant` or
+`customer`; successful responses and authentication/conflict errors are
+`Cache-Control: no-store`. This endpoint shares the existing login rate limit.
+Invalid input returns `400`, invalid credentials or an account absent from this
+store returns `401`, and an unknown or unsupported hostname returns `404`.
+The hostname is resolved by the existing storefront resolver; body store IDs
+and untrusted forwarded-host headers do not select a tenant.
+
+Identity is resolved by normalized email (strip whitespace and lowercase) and
+store **before** checking a password. Only that store's merchant owner or a
+customer registered in that store can authenticate. The existing merchant or
+customer authentication service then verifies credentials and issues its
+unchanged token pair. There is no password-based role probing or fallback.
+If legacy data contains both identities for one email in the same store, login
+returns `409` without checking either password or issuing tokens; support must
+resolve that data explicitly, rather than silently merging accounts.
+
+A store owner's email cannot also be registered as a customer in that store.
+Customer registration and merchant onboarding check both account tables within
+their transactions, acquiring a PostgreSQL `FOR UPDATE` lock on the store row
+before the check and holding it through account creation. The existing unique
+constraints additionally protect customer `(store_id, email)` and global
+merchant email uniqueness. Onboarding creates a new store and its owner account
+atomically, so a partially onboarded store is not visible to registration.
+All supported account creation paths follow this locking protocol; future
+email/ownership changes or account import paths must do so too. Direct SQL
+imports bypassing the protocol need their own collision validation.
+The same email remains allowed as a customer in other stores, including before
+the person onboards their own store. Merchant email uniqueness remains global.
+Collisions return the existing `409` account-email conflict; no global error
+format or schema migration is introduced.
+
+Existing login endpoints remain compatible. Merchant tokens use `/api/auth/refresh`
+and `/api/auth/logout`; customer tokens use the host-scoped
+`/api/public/customer-auth/refresh` and `/api/public/customer-auth/logout`.
+No unified refresh/logout endpoint or frontend behavior is introduced here.
 
 ### Catalog and planned inventory management
 
@@ -205,7 +325,8 @@ variants without requiring every other color-and-size combination.
 The authenticated `/api/products` API supports product creation, lookup,
 paginated listing, update, deactivation, reactivation, and paginated history.
 `/{id}/variants` supports adding and listing variants; individual variants can
-have their optional price updated, be deactivated, and be reactivated at
+be retrieved at `/{id}/variants/{variantId}`, have their optional price updated,
+be deactivated, and be reactivated at
 `/{id}/variants/{variantId}/reactivate`. Product and variant lists default to
 active records and accept `active=false`; pagination uses the same limits as
 item types. A product's individual variant states are preserved while the
@@ -484,7 +605,8 @@ variant pages are separate requests and can reflect different moments if stock
 changes between requests.
 
 The future management screen should show SKU, photo, description, total stock
-and variant-level stock; no screen exists yet.
+and variant-level stock. The merchant product screen supports stock entries; audits
+and stock exits remain API-only.
 
 #### Public catalog API
 
@@ -525,8 +647,8 @@ availability is not guaranteed until a reservation succeeds. Administrative
 APIs, history and actor details remain private.
 
 The public catalog API has no rate limiting. Production exposure requires an
-abuse-prevention and traffic-limiting decision. The storefront UI, product
-checkout screens are not implemented.
+abuse-prevention and traffic-limiting decision. Product details and checkout
+screens are not implemented.
 
 #### Anonymous shopping cart API
 

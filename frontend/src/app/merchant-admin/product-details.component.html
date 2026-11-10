@@ -1,0 +1,156 @@
+<div class="admin">
+  <header><a routerLink="/" class="brand">c. <span>commerce</span></a><span>{{ variantId ? 'GESTÃO DE VARIANTE' : 'GESTÃO DE PRODUTO' }}</span><a [routerLink]="variantId ? ['/painel/produtos', id] : ['/painel/produtos']">{{ variantId ? 'Voltar ao produto' : 'Voltar aos produtos' }}</a></header>
+  <main>
+    <nav class="breadcrumbs" aria-label="Navegação estrutural">
+      <a routerLink="/painel/produtos">Produtos</a><span aria-hidden="true">/</span>
+      @if (variantId) { <a [routerLink]="['/painel/produtos', id]">{{ product()?.name ?? 'Produto' }}</a><span aria-hidden="true">/</span><span aria-current="page">Variante {{ selectedVariant()?.color }} {{ selectedVariant()?.size }}</span> }
+      @else { <span aria-current="page">{{ product()?.name ?? 'Produto' }}</span> }
+    </nav>
+    @if (error()) { <div class="message error" role="alert">{{ error() }}</div> }
+    @if (message()) { <div class="message success" role="status">{{ message() }}</div> }
+    @if (loading()) { <p role="status">Carregando produto e estoque...</p> }
+    @if (product(); as item) {
+      @if (variantId) {
+        @if (selectedVariant(); as variant) {
+          <div class="intro"><span class="overline">VARIANTE</span><h1>{{ item.name }}{{ variant.color ? ' ' + variant.color : '' }}</h1><p>{{ variant.size ? 'Tamanho ' + variant.size + ' · ' : '' }}{{ active() ? 'Ativa' : 'Inativa' }} · Estoque físico: {{ stocks()[variant.id] }}</p></div>
+          <section class="panel variant-management">
+            <h2>Configurações da variante</h2>
+            <p>Cor e tamanho não podem ser alterados após o cadastro. Para outra combinação, crie uma nova variante.</p>
+            @if (!editingPrice()) {
+              <app-record-card [staticCard]="true" label="Preço da variante"><h3>Preço</h3><p>{{ variant.effectivePrice | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</p>
+                <button recordActions type="button" [disabled]="busy() || !item.active || !active()" (click)="editingPrice.set(true)">Editar preço</button></app-record-card>
+            } @else {
+            <form class="variant-fields" [attr.inert]="busy() ? '' : null" [formGroup]="priceForm" (ngSubmit)="updatePrice(variant, priceForm.controls.price.value)" novalidate>
+              <label [for]="'price-' + variant.id">Preço da variante <app-info text="Use ponto para centavos; deixe vazio para usar o preço padrão." /></label>
+              <input [id]="'price-' + variant.id" formControlName="price" inputmode="decimal" placeholder="Preço padrão" />
+              @if (fieldError()['price-' + variant.id]; as error) { <p class="field-error" role="alert">{{ error }}</p> }
+              @if (priceError()) { <p class="field-error" role="alert">{{ priceError() }}</p> }
+              <button type="submit" class="primary" [disabled]="busy() || !item.active || !active()">Salvar preço</button>
+            </form>
+            }
+            @if (!editingShipping()) {
+              <app-record-card [staticCard]="true" label="Medidas para envio"><h3>Medidas para envio</h3><p>Peso: {{ variant.shippingWeightKg ?? 'Não informado' }} kg · Largura: {{ variant.shippingWidthCm ?? 'Não informada' }} cm · Altura: {{ variant.shippingHeightCm ?? 'Não informada' }} cm · Comprimento: {{ variant.shippingLengthCm ?? 'Não informado' }} cm</p>
+                <button recordActions type="button" [disabled]="busy() || !item.active || !active()" (click)="editingShipping.set(true)">Editar medidas</button></app-record-card>
+            } @else {
+            <form class="variant-fields" [attr.inert]="busy() ? '' : null" [formGroup]="shippingForm" (ngSubmit)="saveShipping(variant)" novalidate>
+              <h3>Medidas para envio</h3>
+              <p>Informe valores positivos, usando ponto para casas decimais.</p>
+              <label for="weight">Peso (kg) <app-info text="Peso em quilogramas, com até três casas decimais." /></label>
+              <input id="weight" formControlName="weightKg" inputmode="decimal" placeholder="0.500" />
+              @if (shippingForm.controls.weightKg.touched && shippingForm.controls.weightKg.invalid) { <p class="field-error" role="alert">Informe um peso positivo com até três casas decimais.</p> }
+              <label for="width">Largura (cm)</label><input id="width" formControlName="widthCm" inputmode="decimal" />
+              @if (shippingForm.controls.widthCm.touched && shippingForm.controls.widthCm.invalid) { <p class="field-error" role="alert">Informe uma largura positiva com até duas casas decimais.</p> }
+              <label for="height">Altura (cm)</label><input id="height" formControlName="heightCm" inputmode="decimal" />
+              @if (shippingForm.controls.heightCm.touched && shippingForm.controls.heightCm.invalid) { <p class="field-error" role="alert">Informe uma altura positiva com até duas casas decimais.</p> }
+              <label for="length">Comprimento (cm)</label><input id="length" formControlName="lengthCm" inputmode="decimal" />
+              @if (shippingForm.controls.lengthCm.touched && shippingForm.controls.lengthCm.invalid) { <p class="field-error" role="alert">Informe um comprimento positivo com até duas casas decimais.</p> }
+              @if (shippingError()) { <p class="field-error" role="alert">{{ shippingError() }}</p> }
+              <button type="submit" class="primary" [disabled]="busy() || !item.active || !active()">Salvar medidas</button>
+            </form>
+            }
+            @if (!editingStock() && !pending()) {
+              <app-record-card [staticCard]="true" label="Estoque físico"><h3>Estoque físico</h3><p>{{ stocks()[variant.id] }} unidade(s)</p>
+                <button recordActions type="button" [disabled]="busy()" (click)="editingStock.set(true)">Adicionar estoque</button></app-record-card>
+            } @else {
+            <form class="variant-fields" [attr.inert]="busy() ? '' : null" [formGroup]="movementForm" (ngSubmit)="startMovement(variant, movementForm.controls.quantity.value, movementForm.controls.reason.value)" novalidate>
+              <h3>Adicionar estoque</h3>
+              <p>O estoque é físico e pode ser diferente da quantidade disponível para venda.</p>
+              @if (pending(); as movement) {
+                <div class="message error" role="alert">Entrada de {{ movement.quantity }} unidade(s) ainda não confirmada para a variante {{ movement.variant }}. Motivo: {{ movement.reason }}.
+                  <button type="button" [disabled]="busy()" (click)="sendMovement()">Repetir a mesma tentativa</button>
+                </div>
+              }
+              <p>Se uma entrada ficar sem confirmação, repita a mesma tentativa nesta aba. Antes de fechar a aba, confira o histórico de estoque abaixo. O histórico não identifica, sozinho, qual tentativa foi confirmada.</p>
+              <label [for]="'quantity-' + variant.id">Quantidade <app-info text="Informe a quantidade inteira de unidades recebidas." /></label><input [id]="'quantity-' + variant.id" formControlName="quantity" inputmode="numeric" placeholder="Quantidade" />
+              @if (fieldError()['quantity-' + variant.id]; as error) { <p class="field-error" role="alert">{{ error }}</p> }
+              <label [for]="'reason-' + variant.id">Motivo <app-info text="Descreva o motivo da entrada para o histórico de estoque." /></label><input [id]="'reason-' + variant.id" formControlName="reason" maxlength="500" placeholder="Ex.: recebimento" />
+              @if (fieldError()['reason-' + variant.id]; as error) { <p class="field-error" role="alert">{{ error }}</p> }
+              @if (stockError()) { <p class="field-error" role="alert">{{ stockError() }}</p> }
+              <button type="submit" class="primary" [disabled]="busy() || !!pending() || pendingUnavailable()">Adicionar estoque</button>
+            </form>
+            }
+            <section class="stock-history" aria-labelledby="history-title">
+              <div class="title"><h3 id="history-title">Histórico de estoque</h3><button type="button" [disabled]="historyLoading() || busy()" (click)="loadHistory(0)">Atualizar histórico</button></div>
+              @if (historyLoading()) { <p role="status">Carregando movimentações...</p> }
+              @if (historyError()) { <p class="field-error" role="alert">{{ historyError() }}</p><button type="button" [disabled]="historyLoading()" (click)="loadHistory(historyPage())">Tentar novamente</button> }
+              @if (history(); as page) {
+                @if (!page.content.length) { <p class="empty">Nenhuma movimentação registrada.</p> }
+                @for (movement of page.content; track movement.id) {
+                  <app-record-card [staticCard]="true" label="Movimentação de estoque"><strong>{{ movementLabel(movement.type) }} · {{ movement.afterQuantity - movement.beforeQuantity }} unidade(s)</strong>
+                    <p>{{ movement.reason }}</p><p>{{ movement.occurredAt | date:'dd/MM/yyyy HH:mm:ss' }} · Saldo: {{ movement.beforeQuantity }} → {{ movement.afterQuantity }}</p></app-record-card>
+                }
+                @if (page.totalPages > 1) { <div class="actions pagination"><button type="button" [disabled]="historyLoading() || page.page === 0" (click)="loadHistory(page.page - 1)">Anterior</button><span>Página {{ page.page + 1 }} de {{ page.totalPages }}</span><button type="button" [disabled]="historyLoading() || page.page + 1 >= page.totalPages" (click)="loadHistory(page.page + 1)">Próxima</button></div> }
+              }
+            </section>
+          </section>
+        }
+      } @else {
+      <div class="intro"><span class="overline">CATÁLOGO</span><h1>{{ item.name }}</h1><p>SKU {{ item.sku }} · Preço padrão: {{ item.price | currency:'BRL':'symbol':'1.2-2':'pt-BR' }} · {{ item.active ? 'Ativo' : 'Inativo' }}</p><p>{{ item.description }}</p>
+        @if (item.active) { <a routerLink="/painel/produtos" [queryParams]="{editar: item.id}">Editar produto</a> }
+      </div>
+      <section class="panel">
+        <h2>Variantes e estoque</h2>
+        <p>O estoque é físico e não inclui garantias de disponibilidade para venda. Novas variantes começam com estoque zero.</p>
+        <div class="tabs"><button type="button" [attr.aria-pressed]="active()" (click)="active.set(true); loadVariants(0)">Ativas</button><button type="button" [attr.aria-pressed]="!active()" (click)="active.set(false); loadVariants(0)">Inativas</button></div>
+        @if (pending(); as movement) {
+          <div class="message error" role="alert">Há uma entrada de {{ movement.quantity }} unidade(s) ainda não confirmada.
+            <a [routerLink]="['/painel/produtos', item.id, 'variantes', movement.variant]">Abrir tentativa pendente</a>
+          </div>
+        }
+        @if (variants(); as page) {
+          @for (variant of page.content; track variant.id) {
+            <app-record-card [link]="['/painel/produtos', item.id, 'variantes', variant.id]" [label]="'Gerenciar ' + item.name + ' ' + (variant.color ?? '') + ' ' + (variant.size ?? '')">
+              <div class="variant-link">
+                <span class="variant-description"><strong>{{ item.name }}{{ variant.color ? ' ' + variant.color : '' }}</strong><small>{{ variant.size ? 'Tamanho ' + variant.size : 'Sem tamanho' }}</small></span>
+                <span><small>Preço</small>{{ variant.effectivePrice | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</span>
+                <span><small>Estoque físico</small>{{ stocks()[variant.id] ?? 'Carregando' }}</span>
+              </div>
+              <div recordActions class="card-actions">
+                <button type="button" [disabled]="busy() || !item.active" (click)="setVariantActive(variant)">{{ active() ? 'Desativar variante' : 'Reativar variante' }}</button>
+              </div>
+            </app-record-card>
+          }
+          @if (!page.content.length) { <div class="empty">Nenhuma variante {{ active() ? 'ativa' : 'inativa' }} nesta página.</div> }
+          @if (page.totalPages > 1) { <div class="actions pagination"><button [disabled]="page.page === 0" (click)="loadVariants(page.page - 1)">Anterior</button><span>Página {{ page.page + 1 }} de {{ page.totalPages }}</span><button [disabled]="page.page + 1 >= page.totalPages" (click)="loadVariants(page.page + 1)">Próxima</button></div> }
+        }
+        @if (type(); as attributes) {
+          <form [attr.inert]="busy() ? '' : null" [formGroup]="addForm" (ngSubmit)="addVariant()"><h3>Adicionar variante</h3>
+            <app-variant-options [hasColor]="attributes.hasColor" [hasSize]="attributes.hasSize" [numeric]="attributes.sizeFormat === 'NUMERIC'"
+              [color]="addForm.controls.color.value" [size]="addForm.controls.size.value" [options]="options()" [busy]="busy()" [error]="optionError()"
+              [colorInvalid]="submitted() && attributes.hasColor && !addForm.controls.color.value.trim()"
+              [sizeInvalid]="submitted() && attributes.hasSize && !addForm.controls.size.value.trim()"
+              (draftChange)="addForm.markAsDirty()" (colorChange)="addForm.controls.color.setValue($event); addForm.markAsDirty()" (sizeChange)="addForm.controls.size.setValue($event); addForm.markAsDirty()" (addOption)="addOption($event)" />
+            @if (variantError()) { <p class="field-error" role="alert">{{ variantError() }}</p> }
+            <button class="primary" type="submit" [disabled]="busy() || !item.active">Cadastrar variante</button>
+          </form>
+        }
+      </section>
+      <section class="panel">
+        <h2>Fotos do produto</h2><p>A primeira foto é a principal. Até 10 imagens JPEG, PNG ou WebP de 10 MiB cada; o armazenamento precisa estar configurado.</p>
+        @if (photoError()) { <p class="field-error" role="alert">{{ photoError() }}</p> }
+        <button type="button" [disabled]="busy()" (click)="reloadPhotos()">Atualizar galeria</button>
+        @if (photos(); as images) {
+          <div class="photo-gallery">@for (photo of images; track photo.id; let first = $first) {
+            <figure class="photo-card"><img class="photo" [src]="photo.url" [alt]="'Foto de ' + item.name" />
+              <figcaption>{{ first ? 'Foto principal' : 'Foto do produto' }}</figcaption>
+              <div class="actions">
+                @if (!first) { <button type="button" [disabled]="busy() || photosNeedReload()" (click)="makeCover(photo)">Usar como principal</button> }
+                <button type="button" [disabled]="busy() || photosNeedReload()" (click)="deletingPhoto.set(photo.id)">Remover foto</button>
+              </div>
+              @if (deletingPhoto() === photo.id) { <p>Remover esta imagem?</p><div class="actions"><button type="button" [disabled]="busy() || photosNeedReload()" (click)="deletePhoto(photo)">Confirmar remoção</button><button type="button" [disabled]="busy()" (click)="deletingPhoto.set(null)">Cancelar</button></div> }
+            </figure>
+          }</div>
+          @if (photosNeedReload()) { <p class="field-error" role="alert">Atualize a galeria para conferir o resultado da última operação antes de fazer outra alteração.</p> }
+          <div class="photo-upload">
+            <label for="photo">Adicionar imagem <app-info text="Selecione um arquivo JPEG, PNG ou WebP de até 10 MiB." /></label>
+            <input id="photo" #file type="file" accept="image/jpeg,image/png,image/webp" [disabled]="busy()" (change)="selectPhoto(file)" />
+            @if (preview()) { <figure class="photo-preview"><img class="photo" [src]="preview()" alt="Prévia da imagem selecionada" /><figcaption>{{ selectedFile()?.name }} · Ainda não enviada</figcaption><button type="button" [disabled]="busy()" (click)="cancelPhoto(file)">Descartar seleção</button></figure> }
+            @if (fieldError()['photo']; as error) { <p class="field-error" role="alert">{{ error }}</p> }
+            <button class="primary" type="button" [disabled]="busy() || images.length >= 10 || photosNeedReload()" (click)="upload(file)">Enviar imagem</button>
+          </div>
+        }
+      </section>
+      }
+    }
+  </main>
+</div>

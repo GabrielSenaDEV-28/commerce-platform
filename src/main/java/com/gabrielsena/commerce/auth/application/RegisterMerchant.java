@@ -22,15 +22,18 @@ public class RegisterMerchant {
     private final OnboardMerchant onboardMerchant;
     private final MerchantAccountRepository accountRepository;
     private final PasswordEncoder passwordEncoder;
+    private final StoreAccountIdentity identities;
 
     public RegisterMerchant(
             OnboardMerchant onboardMerchant,
             MerchantAccountRepository accountRepository,
-            PasswordEncoder passwordEncoder
+            PasswordEncoder passwordEncoder,
+            StoreAccountIdentity identities
     ) {
         this.onboardMerchant = onboardMerchant;
         this.accountRepository = accountRepository;
         this.passwordEncoder = passwordEncoder;
+        this.identities = identities;
     }
 
     @Transactional
@@ -47,6 +50,10 @@ public class RegisterMerchant {
                         command.subdomain()
                 )
         );
+
+        if (identities.lockForRegistration(merchant.storeId(), email).customer()) {
+            throw new EmailAlreadyRegisteredException(email);
+        }
 
         try {
             accountRepository.saveAndFlush(MerchantAccount.create(
@@ -65,7 +72,7 @@ public class RegisterMerchant {
     }
 
     public static String normalizeEmail(String email) {
-        return email.trim().toLowerCase(Locale.ROOT);
+        return email.strip().toLowerCase(Locale.ROOT);
     }
 
     private boolean isEmailUniqueConstraintViolation(DataIntegrityViolationException exception) {

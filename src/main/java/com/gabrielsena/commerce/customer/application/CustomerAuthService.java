@@ -4,6 +4,8 @@ import com.gabrielsena.commerce.auth.InvalidCredentialsException;
 import com.gabrielsena.commerce.auth.InvalidRefreshTokenException;
 import com.gabrielsena.commerce.auth.application.TokenPair;
 import com.gabrielsena.commerce.auth.application.TokenService;
+import com.gabrielsena.commerce.auth.application.RegisterMerchant;
+import com.gabrielsena.commerce.auth.application.StoreAccountIdentity;
 import com.gabrielsena.commerce.security.OpaqueTokens;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -21,7 +23,6 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Locale;
 import java.util.UUID;
 
 @Service
@@ -31,23 +32,28 @@ public class CustomerAuthService {
     private final JwtEncoder encoder;
     private final String issuer;
     private final String dummyHash;
+    private final StoreAccountIdentity identities;
 
     public record Customer(UUID id, String name, String email) { }
     private record Account(Customer customer, String passwordHash) { }
 
     public CustomerAuthService(JdbcTemplate jdbc, PasswordEncoder passwords, JwtEncoder encoder,
-                               @Value("${spring.application.name}") String issuer) {
+                               @Value("${spring.application.name}") String issuer, StoreAccountIdentity identities) {
         this.jdbc = jdbc;
         this.passwords = passwords;
         this.encoder = encoder;
         this.issuer = issuer;
         this.dummyHash = passwords.encode(UUID.randomUUID().toString());
+        this.identities = identities;
     }
 
     @Transactional
     public Customer register(UUID store, String name, String email, String password) {
         UUID id = UUID.randomUUID();
         String normalized = normalize(email);
+        if (identities.lockForRegistration(store, normalized).merchant()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "An account already exists for the supplied email.");
+        }
         int created = jdbc.update("""
                 INSERT INTO customer_accounts (customer_id, store_id, name, email, password_hash)
                 VALUES (?, ?, ?, ?, ?) ON CONFLICT (store_id, email) DO NOTHING
@@ -129,6 +135,6 @@ public class CustomerAuthService {
     }
 
     private static String normalize(String email) {
-        return email.strip().toLowerCase(Locale.ROOT);
+        return RegisterMerchant.normalizeEmail(email);
     }
 }

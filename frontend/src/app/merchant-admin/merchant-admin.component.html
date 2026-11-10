@@ -1,0 +1,128 @@
+<div class="admin">
+  <header><a routerLink="/" class="brand">c. <span>commerce</span></a><span>ÁREA DO LOJISTA</span><button type="button" (click)="logout()" [disabled]="busy()">Sair</button></header>
+  <main>
+    <div class="intro"><span class="overline">GESTÃO DA LOJA</span><h1>Seu espaço de administração<span>.</span></h1><p>Organize seu catálogo e acompanhe seus pedidos.</p></div>
+    @if (error() && !formOpen()) { <div class="message error" role="alert">{{ error() }}</div> }
+    @if (loading() && !store()) { <p role="status">Identificando sua loja...</p> }
+    @if (store() && !sameStore()) {
+      <div class="panel"><h2>Entre pelo endereço da sua loja</h2><p>Por segurança, a sessão não é compartilhada entre endereços. Acesse o endereço abaixo e entre novamente.</p>
+        @if (localAddress(); as address) { <a [href]="address">{{ address }}</a> }
+      </div>
+    }
+    @if (sameStore()) {
+      <div class="layout">
+        <aside><p>{{ store()?.name }}</p><nav aria-label="Administração">
+          @for (link of [{id:'perfil',name:'Perfil e loja'}, {id:'categorias',name:'Categorias'}, {id:'produtos',name:'Produtos'}, {id:'pedidos',name:'Pedidos'}]; track link.id) {
+            @if (busy()) { <span class="disabled-link">{{ link.name }}</span> }
+            @else { <a [routerLink]="['/painel', link.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ link.name }} <span>›</span></a> }
+          }
+        </nav>
+          <details class="future-features"><summary>Em breve</summary><p>Estas áreas ainda não estão disponíveis.</p>
+            <nav aria-label="Recursos futuros">@for (link of [{id:'promocoes',name:'Promoções'}, {id:'vendas',name:'Painel de vendas'}, {id:'funcionarios',name:'Funcionários'}, {id:'personalizacao',name:'Personalizar loja'}]; track link.id) {
+              @if (busy()) { <span class="disabled-link">{{ link.name }}</span> }
+              @else { <a [routerLink]="['/painel', link.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ link.name }} <small>Em breve</small></a> }
+            }</nav>
+          </details>
+          <a class="shop" routerLink="/">← Ver minha loja</a></aside>
+        <section class="panel">
+          @if (success()) { <div class="message success" role="status">{{ success() }}</div> }
+          @if (loading()) { <p role="status">Carregando...</p> }
+          @else if (section() === 'perfil') {
+            <div class="title"><div><span class="overline">MINHA LOJA</span><h2>Perfil e loja</h2><p>Dados atuais da sua loja.</p></div></div>
+            <p><strong>Nome da loja:</strong> {{ store()?.name }}</p>
+            <p><strong>Subdomínio:</strong> {{ store()?.subdomain }}</p>
+            <p><strong>Link da loja:</strong> <a routerLink="/">{{ storeUrl() }}</a></p>
+            <app-copy-link path="/" label="Copiar link da loja" />
+            <p><strong>Link de login:</strong> <a routerLink="/entrar">{{ storeUrl() }}entrar</a></p>
+            <app-copy-link path="/entrar" label="Copiar link de login" />
+            <p>O login é o mesmo: sua conta libera a administração; clientes acessam somente a área deles.</p>
+            <p>Alterações do perfil e do endereço da loja ainda não estão disponíveis.</p>
+          } @else if (section() === 'categorias') {
+            <div class="title"><div><span class="overline">CATÁLOGO</span><h2>Categorias e tipos</h2><p>Defina os atributos usados nas variantes dos produtos.</p></div><button class="primary" type="button" (click)="openItem()" [disabled]="busy()">+ Cadastrar</button></div>
+            @if (formOpen()) {
+              <form [attr.inert]="busy() ? '' : null" [formGroup]="itemForm" (ngSubmit)="saveItem()" novalidate><h3>{{ editing() ? 'Editar tipo' : 'Novo tipo' }}</h3>
+                <label for="type-name">Nome <app-info text="Nome da categoria, por exemplo camisetas, até 120 caracteres." /></label><input id="type-name" formControlName="name" [attr.aria-invalid]="itemForm.controls.name.touched && itemForm.controls.name.invalid" />
+                @if (itemForm.controls.name.touched && itemForm.controls.name.invalid) { <p class="field-error">Informe um nome válido de até 120 caracteres.</p> }
+                <label class="check"><input type="checkbox" formControlName="hasColor" /> Possui cor <app-info text="Marque se os produtos deste tipo têm variantes por cor." /></label>
+                <label class="check"><input type="checkbox" formControlName="hasSize" /> Possui tamanho <app-info text="Marque se os produtos deste tipo têm variantes por tamanho." /></label>
+                @if (itemForm.controls.hasSize.value) { <label for="format">Formato de tamanho <app-info text="Escolha letras para roupas ou números para numerações." /></label><select id="format" formControlName="sizeFormat"><option value="LETTER">Letras</option><option value="NUMERIC">Números</option></select> }
+                @if (error()) { <div class="message error" role="alert">{{ error() }}</div> }
+                <div class="actions"><button class="primary" [disabled]="busy()">Salvar</button><button type="button" (click)="closeForm()" [disabled]="busy()">Cancelar</button></div>
+              </form>
+            } @else {
+              <div class="tabs"><button type="button" (click)="setActive(true)" [attr.aria-pressed]="active()">Ativas</button><button type="button" (click)="setActive(false)" [attr.aria-pressed]="!active()">Inativas</button></div>
+              @if (list(); as page) {
+                @if (!page.content.length) { <div class="empty">Nenhum tipo {{ active() ? 'ativo' : 'inativo' }} encontrado.</div> }
+                @for (raw of page.content; track raw.id) { @let item = asType(raw);
+                  <app-record-card [label]="'Ver categoria ' + item.name" [link]="['/painel/categorias', item.id]">
+                    <strong>{{ item.name }}</strong><p>{{ item.hasColor ? 'Com cor' : 'Sem cor' }} · {{ item.hasSize ? 'Com tamanho' : 'Sem tamanho' }}</p>
+                    <div recordActions class="actions">@if (active()) { <button type="button" (click)="openItem(item)">Editar</button> }<button type="button" (click)="toggle(item.id)" [disabled]="busy()">{{ active() ? 'Desativar' : 'Reativar' }}</button></div>
+                  </app-record-card>
+                }
+              }
+            }
+          } @else if (section() === 'produtos') {
+            <div class="title"><div><span class="overline">CATÁLOGO</span><h2>Produtos</h2><p>Cadastre e gerencie os produtos da sua loja.</p></div><button class="primary" type="button" (click)="openProduct()" [disabled]="busy()">+ Cadastrar</button></div>
+            @if (formOpen()) {
+              <form [attr.inert]="busy() ? '' : null" [formGroup]="productForm" (ngSubmit)="saveProduct()" novalidate><h3>{{ editing() ? 'Editar produto' : 'Novo produto' }}</h3>
+                @if (!editing()) {
+                  <label for="product-type">Tipo <app-info text="Escolha o tipo que define os atributos das variantes." /></label><select id="product-type" formControlName="itemTypeId" [attr.aria-invalid]="productForm.controls.itemTypeId.touched && productForm.controls.itemTypeId.invalid"><option value="">Selecione</option>@for (type of types(); track type.id) { <option [value]="type.id">{{ type.name }}</option> }</select>
+                  @if (productForm.controls.itemTypeId.touched && productForm.controls.itemTypeId.invalid) { <p class="field-error">Selecione um tipo.</p> }
+                }
+                <label for="sku">SKU <app-info text="Código único do produto na sua loja, compartilhado pelas variantes." /></label><input id="sku" formControlName="sku" [attr.aria-invalid]="productForm.controls.sku.touched && productForm.controls.sku.invalid" />
+                @if (productForm.controls.sku.touched && productForm.controls.sku.invalid) { <p class="field-error">Informe um SKU de até 100 caracteres.</p> }
+                <label for="product-name">Nome <app-info text="Nome do produto, sem a cor da variante." /></label><input id="product-name" formControlName="name" [attr.aria-invalid]="productForm.controls.name.touched && productForm.controls.name.invalid" />
+                @if (productForm.controls.name.touched && productForm.controls.name.invalid) { <p class="field-error">Informe um nome de até 150 caracteres.</p> }
+                <label for="description">Descrição <app-info text="Conte os detalhes do produto, com até 5000 caracteres." /></label><textarea id="description" formControlName="description" [attr.aria-invalid]="productForm.controls.description.touched && productForm.controls.description.invalid"></textarea>
+                @if (productForm.controls.description.touched && productForm.controls.description.invalid) { <p class="field-error">Informe uma descrição de até 5000 caracteres.</p> }
+                <label for="price">Preço padrão em reais <app-info text="Preço usado quando a variante não possui preço próprio; use ponto para centavos." /></label><input id="price" formControlName="price" inputmode="decimal" placeholder="99.90" [attr.aria-invalid]="productForm.controls.price.touched && productForm.controls.price.invalid" />
+                @if (productForm.controls.price.touched && productForm.controls.price.invalid) { <p class="field-error">Informe um preço válido, como 99.90.</p> }
+                @if (!editing() && selectedType(); as type) {
+                  <app-variant-options [hasColor]="type.hasColor" [hasSize]="type.hasSize" [numeric]="type.sizeFormat === 'NUMERIC'"
+                    [color]="productForm.controls.color.value" [size]="productForm.controls.size.value" [options]="options()" [busy]="busy()" [error]="optionError()"
+                    [colorInvalid]="productForm.controls.color.touched && productForm.controls.color.invalid" [sizeInvalid]="productForm.controls.size.touched && productForm.controls.size.invalid"
+                    (draftChange)="productForm.markAsDirty()" (colorChange)="productForm.controls.color.setValue($event); productForm.markAsDirty()" (sizeChange)="productForm.controls.size.setValue($event); productForm.markAsDirty()" (addOption)="addOption($event)" />
+                }
+                <p>O cadastro cria uma variante inicial. Depois, abra o produto para gerenciar variantes, estoque e fotos.</p>
+                @if (error()) { <div class="message error" role="alert">{{ error() }}</div> }
+                <div class="actions"><button class="primary" [disabled]="busy()">Salvar</button><button type="button" (click)="closeForm()" [disabled]="busy()">Cancelar</button></div>
+              </form>
+            } @else {
+              <div class="tabs"><button type="button" (click)="setActive(true)" [attr.aria-pressed]="active()">Ativos</button><button type="button" (click)="setActive(false)" [attr.aria-pressed]="!active()">Inativos</button></div>
+              @if (list(); as page) {
+                @if (!page.content.length) { <div class="empty">Nenhum produto {{ active() ? 'ativo' : 'inativo' }} encontrado.</div> }
+                @for (raw of page.content; track raw.id) { @let item = asProduct(raw);
+                  <app-record-card [label]="'Ver produto ' + item.name" [link]="['/painel/produtos', item.id]">
+                    <strong>{{ item.name }}</strong><p>SKU {{ item.sku }} · {{ item.price | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</p>
+                    <div recordActions class="actions">@if (active()) { <button type="button" (click)="openProduct(item)" [disabled]="busy()">Editar</button> }<button type="button" (click)="toggle(item.id)" [disabled]="busy()">{{ active() ? 'Desativar' : 'Reativar' }}</button></div>
+                  </app-record-card>
+                }
+              }
+            }
+          } @else if (section() === 'pedidos') {
+            <div class="title"><div><span class="overline">ACOMPANHAMENTO</span><h2>Pedidos</h2><p>Consulta de pedidos da sua loja. Pagamento e entrega ainda não são acompanhados nesta versão.</p></div></div>
+            @if (list(); as page) {
+              <p>{{ page.totalElements }} pedido(s) no total</p>
+              @if (!page.content.length) { <div class="empty">Nenhum pedido encontrado.</div> }
+              @for (raw of page.content; track raw.id) { @let order = asOrder(raw);
+                <app-record-card [staticCard]="true" [label]="'Pedido ' + order.id"><strong>{{ order.customerName }}</strong><p>Pedido {{ order.id }} · {{ order.createdAt | date:'dd/MM/yyyy' }}</p><p>{{ order.total | currency:'BRL':'symbol':'1.2-2':'pt-BR' }} · {{ order.status === 'PENDING' ? 'Pendente' : order.status === 'EXPIRED' ? 'Expirado' : order.status === 'CANCELLED' ? 'Cancelado' : order.status }}</p></app-record-card>
+              }
+            }
+          } @else {
+            <span class="overline">EM DESENVOLVIMENTO</span>
+            <h2>{{ section() === 'promocoes' ? 'Promoções' : section() === 'vendas' ? 'Painel de vendas' : section() === 'funcionarios' ? 'Funcionários e permissões' : section() === 'personalizacao' ? 'Personalizar loja' : 'Área não encontrada' }}</h2>
+            <div class="empty">
+              @if (section() === 'promocoes') { Promoções ativas, cadastro e histórico serão disponibilizados futuramente. }
+              @else if (section() === 'vendas') { Totais, filtros e gráficos de faturamento ainda não estão disponíveis. }
+              @else if (section() === 'funcionarios') { Cadastro, gestão de funcionários e permissões ainda não estão disponíveis. }
+              @else if (section() === 'personalizacao') { Logo, textos, banners, fontes e cores serão configuráveis em uma etapa futura. }
+              @else { Selecione uma opção do menu. }
+            </div>
+          }
+          @if (list(); as page) { @if (!formOpen() && page.totalPages > 1) { <div class="actions pagination"><button type="button" [disabled]="page.page === 0" (click)="load(page.page - 1)">Anterior</button><span>Página {{ page.page + 1 }} de {{ page.totalPages }}</span><button type="button" [disabled]="page.page + 1 >= page.totalPages" (click)="load(page.page + 1)">Próxima</button></div> } }
+          @if (error() && !loading() && !formOpen() && !list()) { <button type="button" (click)="load(0)">Tentar novamente</button> }
+        </section>
+      </div>
+    }
+  </main>
+</div>

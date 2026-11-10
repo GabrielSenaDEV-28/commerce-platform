@@ -17,6 +17,7 @@ import com.gabrielsena.commerce.auth.application.RegisterMerchant;
 import com.gabrielsena.commerce.auth.application.RegisterMerchantCommand;
 import com.gabrielsena.commerce.auth.application.TokenPair;
 import com.gabrielsena.commerce.auth.application.TokenService;
+import com.gabrielsena.commerce.auth.application.StoreAccountIdentity;
 import com.gabrielsena.commerce.auth.domain.MerchantAccount;
 import com.gabrielsena.commerce.catalog.ItemTypeNameInUseException;
 import com.gabrielsena.commerce.catalog.CatalogConflictException;
@@ -58,6 +59,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -80,6 +82,9 @@ import org.springframework.web.server.ResponseStatusException;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import javax.imageio.ImageIO;
@@ -126,7 +131,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
 class CommercePlatformApplicationTests {
 
@@ -135,6 +140,9 @@ class CommercePlatformApplicationTests {
 	private static final String TEST_JWT_SECRET = Base64.getEncoder().encodeToString(
 			"commerce-platform-test-key-at-least-32-bytes".getBytes(StandardCharsets.UTF_8)
 	);
+
+	@LocalServerPort
+	private int serverPort;
 
 	@Autowired
 	private OnboardMerchant onboardMerchant;
@@ -198,6 +206,9 @@ class CommercePlatformApplicationTests {
 
 	@Autowired
 	private CustomerAuthService customerAuthService;
+
+	@Autowired
+	private StoreAccountIdentity storeAccountIdentity;
 
 	@Autowired
 	private CustomerProfileService customerProfileService;
@@ -459,7 +470,11 @@ class CommercePlatformApplicationTests {
 						.content("{\"refreshToken\":\"" + refresh + "\"}")
 						.with(r -> { r.setRemoteAddr(ip); return r; })).andExpect(status().isOk());
 		for (int i = 1; i < 20; i++) {
-			String path = i % 2 == 0 ? "/api/auth/login" : "/api/public/customer-auth/login";
+			String path = switch (i % 3) {
+				case 0 -> "/api/auth/login";
+				case 1 -> "/api/public/customer-auth/login";
+				default -> "/api/public/store-auth/login";
+			};
 			mockMvc.perform(post(path).contentType(APPLICATION_JSON).content("{}")
 							.with(r -> { r.setRemoteAddr(ip); return r; })).andExpect(status().isBadRequest());
 		}
@@ -1405,12 +1420,18 @@ class CommercePlatformApplicationTests {
 		String variantsBody = mockMvc.perform(get("/api/products/{id}/variants", productId).header("Authorization", token))
 				.andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
 		String variantId = JsonPath.read(variantsBody, "$.content[0].id");
+		mockMvc.perform(get("/api/products/{id}/variants/{variantId}", productId, variantId))
+				.andExpect(status().isUnauthorized());
+		mockMvc.perform(get("/api/products/{id}/variants/{variantId}", productId, variantId).header("Authorization", token))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.color").value("Black"))
+				.andExpect(jsonPath("$.effectivePrice").value(10));
 		mockMvc.perform(get("/api/products")).andExpect(status().isUnauthorized());
 		mockMvc.perform(get("/api/products").header("Authorization", token).param("size", "101"))
 				.andExpect(status().isBadRequest());
 		String otherToken = "Bearer " + other.token();
 		mockMvc.perform(get("/api/products/{id}", productId).header("Authorization", otherToken)).andExpect(status().isNotFound());
 		mockMvc.perform(get("/api/products/{id}/variants", productId).header("Authorization", otherToken)).andExpect(status().isNotFound());
+		mockMvc.perform(get("/api/products/{id}/variants/{variantId}", productId, variantId).header("Authorization", otherToken)).andExpect(status().isNotFound());
 		mockMvc.perform(get("/api/products/{id}/history", productId).header("Authorization", otherToken)).andExpect(status().isNotFound());
 		mockMvc.perform(delete("/api/products/{id}", productId).header("Authorization", otherToken)).andExpect(status().isNotFound());
 		mockMvc.perform(put("/api/products/{id}/variants/{variantId}", productId, variantId)
@@ -2015,6 +2036,267 @@ class CommercePlatformApplicationTests {
 	}
 
 	@Test
+	void customVariantOptionsAreScopedToTheMerchantStore() throws Exception {
+		CatalogActor owner = catalogActor();
+		CatalogActor other = catalogActor();
+		String option = "{\"kind\":\"COLOR\",\"name\":\"Azul oceano\",\"colorHex\":\"#2468ac\"}";
+		mockMvc.perform(post("/api/variant-options").contentType(APPLICATION_JSON).content(option))
+				.andExpect(status().isUnauthorized());
+		mockMvc.perform(post("/api/variant-options").header("Authorization", "Bearer " + owner.token())
+				.contentType(APPLICATION_JSON).content(option)).andExpect(status().isCreated());
+		mockMvc.perform(post("/api/variant-options").header("Authorization", "Bearer " + owner.token())
+				.contentType(APPLICATION_JSON).content("{\"kind\":\"COLOR\",\"name\":\"azul OCEANO\",\"colorHex\":\"#2468ac\"}"))
+				.andExpect(status().isConflict());
+		mockMvc.perform(get("/api/variant-options").header("Authorization", "Bearer " + owner.token()))
+				.andExpect(status().isOk()).andExpect(jsonPath("$[0].name").value("Azul oceano"));
+		mockMvc.perform(get("/api/variant-options").header("Authorization", "Bearer " + other.token()))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+		mockMvc.perform(post("/api/variant-options").header("Authorization", "Bearer " + owner.token())
+				.contentType(APPLICATION_JSON).content("{\"kind\":\"COLOR\",\"name\":\"Inválida\",\"colorHex\":\"red\"}"))
+				.andExpect(status().isBadRequest());
+	}
+
+	@Test
+	void merchantStoreIdentityIsAuthenticatedAndScoped() throws Exception {
+		CatalogActor actor = catalogActor();
+		mockMvc.perform(get("/api/store/me")).andExpect(status().isUnauthorized());
+		mockMvc.perform(get("/api/store/me").header("Authorization", "Bearer " + actor.token()))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.subdomain").value(storefrontHost(actor).replace(".localhost", "")))
+				.andExpect(result -> assertEquals("no-store", result.getResponse().getHeader("Cache-Control")));
+	}
+
+	@Test
+	void customerRegistrationOnUnknownHostReturnsNotFoundOverHttp() throws Exception {
+		var request = HttpRequest.newBuilder(URI.create("http://localhost:" + serverPort + "/api/public/customer-auth/register"))
+				.header("Content-Type", "application/json")
+				.POST(HttpRequest.BodyPublishers.ofString("{\"name\":\"Ana\",\"email\":\"ana@example.com\",\"password\":\"a-strong-password\"}"))
+				.build();
+		var response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+		assertEquals(404, response.statusCode());
+		assertEquals("Store not found.", JsonPath.read(response.body(), "$.detail"));
+	}
+
+	@Test
+	void authenticatedMissingResourcesPreserveNotFoundOverHttp() throws Exception {
+		CatalogActor actor = catalogActor();
+		UUID product = UUID.randomUUID();
+		UUID variant = UUID.randomUUID();
+		var client = HttpClient.newHttpClient();
+		for (String path : List.of("/api/products/" + product,
+				"/api/products/" + product + "/variants/" + variant,
+				"/api/inventory/products/" + product + "/variants/" + variant + "/movements")) {
+			var request = HttpRequest.newBuilder(URI.create("http://localhost:" + serverPort + path))
+					.header("Authorization", "Bearer " + actor.token()).GET().build();
+			assertEquals(404, client.send(request, HttpResponse.BodyHandlers.ofString()).statusCode(), path);
+		}
+		var unauthenticated = HttpRequest.newBuilder(URI.create("http://localhost:" + serverPort + "/api/products")).GET().build();
+		assertEquals(401, client.send(unauthenticated, HttpResponse.BodyHandlers.ofString()).statusCode());
+		var directError = HttpRequest.newBuilder(URI.create("http://localhost:" + serverPort + "/error")).GET().build();
+		assertEquals(401, client.send(directError, HttpResponse.BodyHandlers.ofString()).statusCode());
+	}
+
+	@Test
+	void photoServiceFailuresPreserveServerErrorOverHttp() throws Exception {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		doNothing().when(photoStorage).put(any(), any(), any());
+		doReturn("https://images.example.test/photo.png").when(photoStorage).url(any());
+		ByteArrayOutputStream output = new ByteArrayOutputStream();
+		ImageIO.write(new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB), "png", output);
+		String path = "/api/products/" + fixture.productId() + "/photos";
+		mockMvc.perform(multipart(path).file(new MockMultipartFile("file", "x.png", "image/png", output.toByteArray()))
+				.header("Authorization", "Bearer " + actor.token())).andExpect(status().isCreated());
+		doThrow(new IllegalStateException("Storage unavailable")).when(photoStorage).url(any());
+		var request = HttpRequest.newBuilder(URI.create("http://localhost:" + serverPort + path))
+				.header("Authorization", "Bearer " + actor.token()).GET().build();
+		assertEquals(500, HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString()).statusCode());
+	}
+
+	@Test
+	void storeLoginShouldRecognizeOwnerAndCustomerWithoutCrossStorePrivileges() throws Exception {
+		CatalogActor owner = catalogActor();
+		CatalogActor other = catalogActor();
+		String host = storefrontHost(owner);
+		String otherHost = storefrontHost(other);
+		UUID store = catalogStoreResolver.storeFor(owner.id());
+		UUID otherStore = catalogStoreResolver.storeFor(other.id());
+		String ownerEmail = merchantAccountRepository.findById(owner.id()).orElseThrow().getEmail();
+		String customerEmail = uniqueEmail();
+		customerAuthService.register(store, "Customer", customerEmail, "customer-password");
+		customerAuthService.register(otherStore, "Owner shopping elsewhere", ownerEmail, "customer-password");
+		String ownerAuth = storeLogin(host, ownerEmail.toUpperCase(java.util.Locale.ROOT), "a-strong-local-password")
+				.andExpect(status().isOk()).andExpect(jsonPath("$.accountKind").value("merchant"))
+				.andExpect(jsonPath("$.tokenType").value("Bearer")).andExpect(jsonPath("$.expiresIn").value(900))
+				.andExpect(result -> assertEquals("no-store", result.getResponse().getHeader("Cache-Control")))
+				.andReturn().getResponse().getContentAsString();
+		String ownerToken = JsonPath.read(ownerAuth, "$.accessToken");
+		mockMvc.perform(get("/api/store/me").header("Authorization", "Bearer " + ownerToken)
+						.with(r -> { r.setServerName(host); return r; })).andExpect(status().isOk());
+		assertNotNull(refreshAuthentication.execute(JsonPath.read(ownerAuth, "$.refreshToken")));
+		String auth = storeLogin(host, customerEmail.toUpperCase(java.util.Locale.ROOT), "customer-password")
+				.andExpect(status().isOk()).andExpect(jsonPath("$.accountKind").value("customer"))
+				.andReturn().getResponse().getContentAsString();
+		String customerToken = JsonPath.read(auth, "$.accessToken");
+		mockMvc.perform(get("/api/public/customer/profile").header("Authorization", "Bearer " + customerToken)
+						.with(r -> { r.setServerName(host); return r; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.email").value(customerEmail));
+		mockMvc.perform(get("/api/products").header("Authorization", "Bearer " + customerToken))
+				.andExpect(status().isForbidden());
+		mockMvc.perform(get("/api/public/customer/profile").header("Authorization", "Bearer " + customerToken)
+						.with(r -> { r.setServerName(otherHost); return r; })).andExpect(status().isForbidden());
+		assertNotNull(customerAuthService.refresh(store, JsonPath.read(auth, "$.refreshToken")));
+		storeLogin(host, ownerEmail, "customer-password").andExpect(status().isUnauthorized());
+		storeLogin(host, customerEmail, "wrong-password").andExpect(status().isUnauthorized());
+		storeLogin(otherHost, customerEmail, "customer-password").andExpect(status().isUnauthorized());
+		storeLogin(otherHost, ownerEmail, "a-strong-local-password").andExpect(status().isUnauthorized());
+		String elsewhere = storeLogin(otherHost, ownerEmail, "customer-password")
+				.andExpect(status().isOk()).andExpect(jsonPath("$.accountKind").value("customer"))
+				.andReturn().getResponse().getContentAsString();
+		mockMvc.perform(get("/api/public/customer/profile")
+						.header("Authorization", "Bearer " + JsonPath.read(elsewhere, "$.accessToken"))
+						.with(r -> { r.setServerName(otherHost); return r; }))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.email").value(ownerEmail));
+	}
+
+	private org.springframework.test.web.servlet.ResultActions storeLogin(String host, String email, String password)
+			throws Exception {
+		return mockMvc.perform(post("/api/public/store-auth/login").contentType(APPLICATION_JSON)
+				.content("{\"email\":\"" + email + "\",\"password\":\"" + password + "\"}")
+				.with(r -> { r.setServerName(host); return r; }));
+	}
+
+	@Test
+	void storeLoginShouldRejectUnknownHostsAndAccountsAndIgnoreForwardedHost() throws Exception {
+		CatalogActor actor = catalogActor();
+		String email = merchantAccountRepository.findById(actor.id()).orElseThrow().getEmail();
+		for (String host : List.of("localhost", "unknown-" + uniqueSubdomain() + ".localhost",
+				"shop.localhost.attacker.test", "nested.shop.localhost")) {
+			storeLogin(host, email, "a-strong-local-password").andExpect(status().isNotFound())
+					.andExpect(jsonPath("$.detail").value("Store not found."));
+		}
+		mockMvc.perform(post("/api/public/store-auth/login").header("X-Forwarded-Host", storefrontHost(actor))
+						.contentType(APPLICATION_JSON)
+						.content("{\"email\":\"" + email + "\",\"password\":\"a-strong-local-password\"}")
+						.with(r -> { r.setServerName("localhost"); return r; })).andExpect(status().isNotFound());
+		storeLogin(storefrontHost(actor), uniqueEmail(), "wrong-password").andExpect(status().isUnauthorized())
+				.andExpect(jsonPath("$.detail").value("Authentication request is invalid."))
+				.andExpect(result -> assertEquals("no-store", result.getResponse().getHeader("Cache-Control")));
+		storeLogin(storefrontHost(actor), "not-an-email", "wrong-password").andExpect(status().isBadRequest());
+	}
+
+	@Test
+	void storeLoginShouldRejectLegacyAmbiguityWithoutIssuingTokens() throws Exception {
+		CatalogActor actor = catalogActor();
+		UUID store = catalogStoreResolver.storeFor(actor.id());
+		String email = merchantAccountRepository.findById(actor.id()).orElseThrow().getEmail();
+		var customer = customerAuthService.register(store, "Legacy", uniqueEmail(), "customer-password");
+		jdbcTemplate.update("UPDATE customer_accounts SET email = ? WHERE customer_id = ?", email, customer.id());
+		Integer merchantTokens = jdbcTemplate.queryForObject(
+				"SELECT COUNT(*) FROM refresh_tokens WHERE account_id = ?", Integer.class, actor.id());
+		for (String password : List.of("customer-password", "a-strong-local-password", "wrong-password")) {
+			storeLogin(storefrontHost(actor), email, password).andExpect(status().isConflict())
+					.andExpect(jsonPath("$.detail").value(
+							"Ambiguous store account. Contact support to resolve the email conflict."))
+					.andExpect(result -> assertEquals("no-store", result.getResponse().getHeader("Cache-Control")));
+		}
+		assertEquals(merchantTokens, jdbcTemplate.queryForObject(
+				"SELECT COUNT(*) FROM refresh_tokens WHERE account_id = ?", Integer.class, actor.id()));
+		assertEquals(0, jdbcTemplate.queryForObject(
+				"SELECT COUNT(*) FROM customer_refresh_tokens WHERE customer_id = ?", Integer.class, customer.id()));
+	}
+
+	@Test
+	void storeRegistrationShouldReserveOwnerEmailButAllowOtherStoresAndLaterOnboarding() throws Exception {
+		CatalogActor actor = catalogActor();
+		CatalogActor other = catalogActor();
+		String email = merchantAccountRepository.findById(actor.id()).orElseThrow().getEmail();
+		mockMvc.perform(post("/api/public/customer-auth/register").contentType(APPLICATION_JSON)
+						.content("{\"name\":\"Customer\",\"email\":\"" + email.toUpperCase(java.util.Locale.ROOT)
+								+ "\",\"password\":\"customer-password\"}")
+						.with(r -> { r.setServerName(storefrontHost(actor)); return r; }))
+				.andExpect(status().isConflict());
+		UUID store = catalogStoreResolver.storeFor(actor.id());
+		assertEquals(409, assertThrows(ResponseStatusException.class,
+				() -> customerAuthService.register(store, "Customer", " " + email.toUpperCase(java.util.Locale.ROOT) + " ",
+						"customer-password")).getStatusCode().value());
+		customerAuthService.register(catalogStoreResolver.storeFor(other.id()), "Customer", email, "customer-password");
+		String futureOwner = uniqueEmail();
+		customerAuthService.register(store, "Future owner", futureOwner, "customer-password");
+		var onboarded = registerMerchant.execute(new RegisterMerchantCommand(
+				"Merchant", "Store", uniqueSubdomain(), futureOwner.toUpperCase(java.util.Locale.ROOT), "merchant-password"));
+		assertEquals(409, assertThrows(ResponseStatusException.class,
+				() -> customerAuthService.register(onboarded.storeId(), "Customer", futureOwner,
+						"customer-password")).getStatusCode().value());
+		storeLogin(onboarded.subdomain() + ".localhost", futureOwner, "merchant-password")
+				.andExpect(status().isOk()).andExpect(jsonPath("$.accountKind").value("merchant"));
+		storeLogin(storefrontHost(actor), futureOwner, "customer-password")
+				.andExpect(status().isOk()).andExpect(jsonPath("$.accountKind").value("customer"));
+	}
+
+	@Test
+	void storeRegistrationShouldSerializeConcurrentCustomerEmails() throws Exception {
+		CatalogActor actor = catalogActor();
+		UUID store = catalogStoreResolver.storeFor(actor.id());
+		String email = uniqueEmail();
+		CountDownLatch start = new CountDownLatch(1);
+		try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+			List<Future<?>> results = List.of(
+					executor.submit(() -> { start.await(); return customerAuthService.register(
+							store, "First", email, "customer-password"); }),
+					executor.submit(() -> { start.await(); return customerAuthService.register(
+							store, "Second", email.toUpperCase(java.util.Locale.ROOT), "customer-password"); }));
+			start.countDown();
+			assertOneSuccessOneConflict(results);
+		}
+		assertEquals(1, jdbcTemplate.queryForObject(
+				"SELECT COUNT(*) FROM customer_accounts WHERE store_id = ? AND email = ?", Integer.class, store, email));
+	}
+
+	@Test
+	void storeRegistrationShouldRecheckOwnerAfterWaitingForConcurrentAccountCreation() throws Exception {
+		var store = onboardMerchant.execute(new OnboardMerchantCommand("Merchant", "Store", uniqueSubdomain()));
+		String email = uniqueEmail();
+		CountDownLatch ownerLocked = new CountDownLatch(1);
+		CountDownLatch commitOwner = new CountDownLatch(1);
+		CountDownLatch customerStarted = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		try {
+			// Exercise the shared onboarding lock with a store created before its local owner account.
+			Future<?> owner = executor.submit(() ->
+					new org.springframework.transaction.support.TransactionTemplate(transactionManager).execute(status -> {
+						assertFalse(storeAccountIdentity.lockForRegistration(store.storeId(), email).customer());
+						ownerLocked.countDown();
+						try {
+							assertTrue(commitOwner.await(10, TimeUnit.SECONDS));
+						} catch (InterruptedException exception) {
+							Thread.currentThread().interrupt();
+							throw new IllegalStateException(exception);
+						}
+						return merchantAccountRepository.saveAndFlush(
+								MerchantAccount.create(store.merchantId(), email, "not-used-for-login"));
+					}));
+			assertTrue(ownerLocked.await(10, TimeUnit.SECONDS));
+			Future<?> customer = executor.submit(() -> {
+				customerStarted.countDown();
+				return customerAuthService.register(store.storeId(), "Customer", email, "customer-password");
+			});
+			assertTrue(customerStarted.await(10, TimeUnit.SECONDS));
+			assertThrows(TimeoutException.class, () -> customer.get(200, TimeUnit.MILLISECONDS));
+			commitOwner.countDown();
+			owner.get(10, TimeUnit.SECONDS);
+			ExecutionException failure = assertThrows(ExecutionException.class, () -> customer.get(10, TimeUnit.SECONDS));
+			assertEquals(409, assertInstanceOf(ResponseStatusException.class, failure.getCause()).getStatusCode().value());
+			assertEquals(0, jdbcTemplate.queryForObject(
+					"SELECT COUNT(*) FROM customer_accounts WHERE store_id = ? AND email = ?",
+					Integer.class, store.storeId(), email));
+		} finally {
+			commitOwner.countDown();
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
 	void customerAuthenticationShouldEnforceStoreAndRotateRefreshTokens() throws Exception {
 		CatalogActor owner = catalogActor();
 		CatalogActor other = catalogActor();
@@ -2022,6 +2304,10 @@ class CommercePlatformApplicationTests {
 		String otherHost = storefrontHost(other);
 		String registration = "{\"name\":\"Ana\",\"email\":\" ANA@example.com \",\"password\":\"a-strong-password\"}";
 		String valid = "{\"name\":\"Ana\",\"email\":\"ana@example.com\",\"password\":\"a-strong-password\"}";
+		mockMvc.perform(post("/api/public/customer-auth/register").contentType(APPLICATION_JSON).content(valid)
+						.with(request -> { request.setServerName("localhost"); return request; }))
+				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.detail").value("Store not found."));
 		mockMvc.perform(post("/api/public/customer-auth/register").contentType(APPLICATION_JSON).content(registration)
 						.with(request -> { request.setServerName(host); return request; }))
 				.andExpect(status().isBadRequest());

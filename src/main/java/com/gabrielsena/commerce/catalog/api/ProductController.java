@@ -86,6 +86,13 @@ public class ProductController {
         return ResponseEntity.status(HttpStatus.CREATED).body(VariantResponse.from(variant, service.get(actor, id)));
     }
 
+    @GetMapping("/{id}/variants/{variantId}")
+    public VariantResponse variant(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id,
+                                   @PathVariable UUID variantId) {
+        UUID actor = actor(jwt);
+        return VariantResponse.from(service.getVariant(actor, id, variantId), service.get(actor, id));
+    }
+
     @PutMapping("/{id}/variants/{variantId}")
     public VariantResponse updateVariant(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id,
                                          @PathVariable UUID variantId,
