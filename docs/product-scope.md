@@ -96,12 +96,19 @@ browse the catalog, purchase products, and follow the lifecycle of their orders.
 The Angular frontend provides initial merchant and customer registration and
 login screens and a storefront home with a paginated public product listing.
 Customer registration, login and storefront use the store's hostname.
-Tokens are held only in page memory;
-reloading requires a new login and automatic token renewal is not implemented.
-The interface clears expired sessions using the login response's lifetime or
-an authenticated 401, then returns to the appropriate login with a validated
-local destination. Expiration takes precedence over unsaved changes; no form
-drafts or authentication tokens are persisted for recovery.
+Access tokens are held only in page memory. Browser sessions use a host-only
+HttpOnly refresh cookie and restore authentication before initial rendering and
+route guards, including after reload. Access is renewed before expiration;
+concurrent renewals share one request. A rejected authenticated request can be
+retried once after successful renewal; transport/server failures never cause
+automatic write retries. An invalid refresh session requests login again, while
+network/server failures show a retryable session warning and block cart changes
+without deleting account contents. Successful login always opens
+the store home for both customer and merchant, ignoring previous return targets;
+already authenticated visits to login also open the home. Customers resume
+checkout through the recovered bag, not an automatic settings/checkout
+redirect. Expiration takes precedence over unsaved changes; no form
+drafts or authentication tokens are saved in browser storage.
 The customer account provides profile editing, address management, and an
 order list through existing authenticated APIs. Payment methods, email and
 password changes are explicitly unavailable and collect no payment credentials.
@@ -111,11 +118,43 @@ shipping estimates by postal code. Quick add from the listing opens the same
 variant-selection component in a native modal dialog, without choosing an
 arbitrary variant. The shopping bag supports current prices, quantity changes,
 removal and cart shipping estimates through the existing public APIs.
-Cart credentials stay in origin-scoped page memory; reloading or closing the
-tab loses access, while navigating within the application preserves it.
+Cart items remain in PostgreSQL. Anonymous access tokens are stored in
+origin-scoped `sessionStorage` to survive reloads in the same tab; no customer
+authentication tokens are stored there. On customer login, authenticated
+registration or restored browser session, the frontend recovers
+the account cart and merges the anonymous bag through
+`POST /api/public/cart/customer`, sending customer Bearer and optional anonymous
+`Cart-Token`. The response is `{token, expiresAt, cart}`. Account cart tokens remain
+in page memory and require the owning customer's Bearer on every use, including
+checkout and shipping. Independent device tokens permit recovery on another
+device without invalidating existing access. Logout/session expiry clear account
+cart access and visible items; subsequent login recovers the server cart.
+An anonymous bag alone does not survive closing the tab; account recovery needs
+an authenticated session; the refresh cookie restores it on this store's origin.
+Customer registration signs in immediately and performs the same anonymous merge.
+After a confirmed merge the anonymous capability is removed; logout hides the
+account bag instead of turning it into the next visitor's anonymous bag.
+Transparent renewal preserves cart capability, contents and pending checkout
+state instead of repeating the merge.
+
+Merging is transactional and idempotent: matching variants have their quantities
+summed, other products and unavailable variants are retained, and consumed
+anonymous sources cannot be reused by another customer. Repeating the same merge
+after a lost response does not double quantities. Reservations, item-count limits
+and integer overflow produce explicit conflicts without silent truncation.
+Recovery failures remain visible in a global banner with retry, not an empty-cart
+success state. An expired anonymous source is discarded only by explicit action.
+Blocked browser storage produces a visible warning instead of promising reload
+recovery. No prices, availability or checkout snapshots are trusted from storage.
 "Buy now" adds the selection and opens the bag review without clearing other
-items; it does not create an order or charge the customer. Checkout UI,
-payment and installments remain explicitly unavailable. Shipping estimates
+items; it does not create an order or charge the customer. The bag links to an
+authenticated customer checkout that explicitly reserves stock, reviews current
+reservation prices, selects a saved delivery address and reserved-item shipping
+service or available store pickup, and creates a pending order. Partial orders
+require explicit consent. Profile/address editing reuses existing account screens
+with a return link. Order cards open authenticated, owner-scoped details with
+server snapshots and a manual status refresh. Payment and installments remain
+explicitly unavailable. Pre-checkout shipping estimates
 require configured shipping integration and variant measurements, do not
 reserve stock and are invalidated when their inputs change.
 Category filtering, storefront settings, sales dashboard and per-store branding
@@ -138,7 +177,67 @@ variant fields. Product/variant breadcrumbs and a dedicated not-found page
 complete navigation. The decisions and failure-recovery behavior are recorded
 in `frontend/README.md` under "Decisões de acabamento".
 
+### Mobile navigation, product actions and local favorites
+
+At widths up to 720px, the storefront uses a sticky, compact header with the
+brand, a left-hand menu trigger and accessible account/bag icons. The shared
+`MobileMenuComponent` uses a native modal dialog for keyboard focus, Escape and
+backdrop dismissal. The left menu includes "Início"; the mobile profile icon
+opens a separate right-hand drawer directly, without navigating to settings first.
+It lists customer or merchant sections and logout, or login/registration when
+anonymous. Account and administration screens also open their menus on the right.
+Both sides slide in/out over 260ms with a fading backdrop, respecting reduced
+motion preferences. Its navigation closes after successful navigation, including
+visits to the current URL; cancelled unsaved-change navigation keeps it open.
+Customer and merchant settings reuse the desktop menu templates inside this
+drawer and hide the desktop sidebar on mobile. Existing section URLs remain the
+source of navigation: each section gets the mobile content area without creating
+duplicate screens, forms or APIs. Desktop layout is preserved. Writes still
+block navigation and menu dismissal. Categories and offers are explicitly
+unavailable; mobile navigation does not simulate filters or promotional data.
+Account and administration screens are lazy-loaded so their larger forms and
+menus do not increase the initial storefront payload beyond its existing budget.
+Section switches retain the same routed component and stable panel.
+Quick add closes its native modal only after the cart write succeeds and the
+shared busy lock is released; success feedback stays visible in the catalog.
+Validation and API failures keep the selection open. Direct purchase still opens
+bag review after confirmation.
+
+`ProductCardComponent` centralizes the clickable product area, product information
+and separate cart/favorite actions. The link opens product details to select and
+buy; clicking either action does not activate the product link. The cart button
+derives its state from `CartService`, not a per-card flag: any variant present
+switches it to a dark-green "Retirar do carrinho" action. Removal requires a
+native confirmation explaining that all colors, sizes and quantities of that
+product will be removed. After confirmation the client reads the current bag and
+sequentially removes that product's variants using existing endpoints, preserving
+other products. Each confirmed response updates the shared bag. This sequence is
+not atomic: failures stop it, warn about partial/uncertain removal and offer bag
+review. A new attempt reads the server again; no writes are retried automatically.
+
+`FavoritesService` stores only product IDs in origin-scoped `localStorage`.
+Hearts toggle immediately and expose their state to assistive technology.
+Favorites survive reloads and later visits in this browser; storage events keep
+tabs of the same store in sync. They are not account-owned or synchronized across
+devices. `/favoritos` is lazy-loaded and fetches current public details with at
+most four concurrent requests. Missing/inactive products remain saved and are
+distinguished from transient API failures; each offers retry/removal. Removal
+does not touch the cart. Corrupt or blocked local storage is explicitly reported,
+with recovery/confirmed clearing actions. No prices or product snapshots are
+persisted. The product share icon sits
+beside the description in the upper product summary, keeping the existing green
+tooltip, copy feedback and manual-copy fallback.
+
 ### Frontend branch completion and next increments
+
+The mobile purchase journey is exercised in Chromium against the production
+build at 320px, 375px, 720px and 1280px with controlled API fixtures:
+home, both drawers, favorite persistence, anonymous reload recovery, login/merge,
+product, bag, checkout, pending order and account addresses. Checks include
+horizontal overflow and uncaught browser errors. Shop headers remain sticky on
+mobile; customer/merchant desktop layouts remain unchanged. These browser checks
+verify frontend behavior, not a live payment or shipping integration. Backend
+integration tests separately cover persisted recovery and merge authorization.
 
 The current frontend finish includes mobile layout refinements, keyboard skip
 navigation to main content, touch targets, inline field-error associations and
@@ -152,14 +251,69 @@ Unimplemented administration and account sections are grouped and labeled
 available to explain limitations, without fake saves or sample production data.
 These changes do not introduce backend behavior.
 
-The next recommended functional increment is integrated checkout, including
-address, fulfillment, reservation and order creation; payment remains a separate
-provider integration. Search/filter/sort must cover the whole server-side catalog,
+Integrated checkout now connects the existing reservation, profile, address,
+shipping, pickup and pending-order APIs; no backend contract or payment behavior
+was added. Checkout and order detail routes load lazily. Customer profile/address
+types are shared instead of duplicating forms. Merely opening checkout does not
+reserve stock. Login always opens the storefront; the bag is recovered so
+customers can explicitly resume checkout after authentication.
+
+The interface uses the server reservation prices and excludes unreserved items
+from its subtotal. Local deadlines disable stale reservation/quote submission,
+but the server remains authoritative. Address or fulfillment changes clear the
+shipping selection. A changed shipping quote requires a new consultation and
+explicit service selection, never silent acceptance of a new total. Unavailable
+shipping/pickup cannot become free delivery or a simulated fulfillment option.
+
+Cart and checkout requests share a busy lock. Cancellation requires a warning
+about released stock and navigates to the bag only after server confirmation.
+An explicit reservation-status refresh also reconciles lost cancellation
+responses, clears stale shipping and never assumes that cancellation succeeded.
+Transport/server failures during order creation retain the original reservation
+and request body in page memory; editing/cancellation are hidden until the customer
+explicitly retries the same idempotent request. Session expiry retains this attempt
+for login, but closing/reloading still loses checkout choices and the exact
+pending-request context, not the account cart. Explicit logout or a different
+customer login clears prior checkout state. The
+customer can recover created orders through the authenticated account order list.
+After successful creation the bag remains tied to that active reservation; a new
+checkout review is offered explicitly after its deadline, without hiding or
+automatically cancelling the previous order.
+
+Payment remains the next transactional increment and needs provider selection,
+idempotent webhooks, expiration and atomic reservation-to-sale conversion.
+Search/filter/sort must cover the whole server-side catalog,
 not only a loaded page. Promotions need authoritative prices/validity, sales
 dashboards need server-side aggregates and staff management needs server-enforced
 permissions. A future customization preview may be prototyped separately with
 clearly labeled demonstration data, but cannot claim to save or publish without
 a backend contract. See `frontend/README.md` for the detailed interface decisions.
+
+### Stable settings panels and future caching
+
+Customer and merchant settings reuse the existing route component while changing
+sections. Header, sidebar and panel remain mounted; headings render immediately
+and only API-dependent contents are refreshed. A small positioned loading status,
+`aria-busy`, inert updating content and a stable minimum panel height replace the
+full-panel loading placeholder. Administrative pagination retains its records until
+the response; section/filter changes remove incompatible records. This is rendering
+continuity, not a new data cache, and each section still queries the server.
+
+Future high-traffic-screen caching must start with request/latency measurements.
+Deduplicate identical in-flight reads and cancel obsolete requests before adding
+TTL-based reuse. Keys must include store/origin, resource, filters, sorting,
+pagination and identity/permissions for authenticated reads. Invalidate affected
+reads after writes and clear identity-specific state on logout/session expiration.
+Never reuse responses between tenants or identities.
+
+Evaluate short-lived catalog/settings caching and conditional ETag/Last-Modified
+revalidation only with backend support and compatible cache headers. Respect
+`Cache-Control: no-store`; profile, addresses and orders must not be persisted in
+browser/service-worker caches without an explicit privacy and server policy.
+Checkout stock/prices, reservations, shipping and order-creation results remain
+server-authoritative; do not cache mutations or treat stale data as purchase
+confirmation. Background refresh must label stale information and report failures.
+No new caching layer is implemented in this increment.
 
 ### Local development infrastructure (planned)
 
@@ -255,7 +409,60 @@ format or schema migration is introduced.
 Existing login endpoints remain compatible. Merchant tokens use `/api/auth/refresh`
 and `/api/auth/logout`; customer tokens use the host-scoped
 `/api/public/customer-auth/refresh` and `/api/public/customer-auth/logout`.
-No unified refresh/logout endpoint or frontend behavior is introduced here.
+These legacy JSON-token endpoints are not the Angular browser session flow.
+
+#### Persistent browser sessions
+
+The Angular application uses `POST /api/public/store-auth/session/login`,
+`/register`, `/refresh` and `/logout` on the same origin as the storefront.
+Login accepts `{email,password}`; register accepts `{name,email,password}` and
+creates a signed-in customer. Refresh and logout need no request body. Login
+and refresh return 200, registration 201 and logout 204.
+Successful login/register/refresh return
+`{accessToken,tokenType:"Bearer",expiresIn:900,accountKind,identity}`, where
+`identity` is a stable account UUID and `accountKind` is `merchant` or `customer`.
+There is no refresh token in JSON, URLs, frontend storage or JavaScript-readable
+cookies. Session endpoints must not receive the access-token Authorization header.
+
+The refresh cookie is `store_session`, host-only (no Domain), HttpOnly,
+SameSite=Strict, with Path `/api/public/store-auth/session`. Secure is enabled by
+default and always used for HTTPS requests. Every endpoint requires
+`X-Store-Session: 1` and an Origin matching the request host, scheme and port
+(default ports are equivalent). A supplied Sec-Fetch-Site must be same-origin.
+Missing or mismatching origin/header, null origins and sibling subdomains return
+403 `STORE_SESSION_ORIGIN_REJECTED` before authentication or rate limiting.
+There is no permissive cross-origin credential flow.
+
+`STORE_SESSION_COOKIE_SECURE` defaults to true: production requires HTTPS and
+a reverse proxy preserving the browser Host. For **local HTTP only**, set
+`STORE_SESSION_COOKIE_SECURE=false` on the backend and use the Angular same-origin
+proxy with `changeOrigin:false`. Do not carry that override into production.
+`STORE_SESSION_REFRESH_TTL` defaults to `P7D` and
+`STORE_SESSION_ABSOLUTE_TTL` to `P30D`. The access JWT lasts 15 minutes; each
+refresh rotates a 7-day token, capped by the original 30-day session deadline.
+Cookie Max-Age respects both deadlines; renewal cannot extend the absolute limit.
+
+Migration V25 stores browser session families and SHA-256 token hashes, never
+raw refresh tokens. Refresh atomically locks the session/token, marks the old
+token used and creates its replacement. Reusing an already-used token revokes
+the whole family. Logout revokes the family even when its submitted cookie was
+already rotated; concurrent rotation cannot undo logout. Issued access JWTs
+remain valid until their short expiration, rather than being centrally revoked.
+Each refresh validates the store, account existence and merchant ownership.
+Another tenant's token is rejected without revoking that tenant's session.
+Login/register/refresh reuse the existing authentication rate-limit buckets.
+
+Missing, expired, revoked or replayed refresh cookies return 401
+`STORE_SESSION_INVALID` and clear the cookie. Unknown stores return 404;
+infrastructure errors retain their 5xx status, not a false unauthorized response.
+The frontend waits for bootstrap restoration before rendering/guards, renews
+early, deduplicates refresh within a tab, and uses Web Locks to serialize browser
+session operations across tabs of the same origin when available. Browsers
+without Web Locks retain per-tab deduplication; overlapping refreshes across tabs
+can trigger replay protection and require login again. Refresh never emits a new
+login for the same identity, so account-cart recovery and checkout are preserved.
+Network/server restoration failures produce an explicit retry action; cart writes
+remain blocked until session state is resolved.
 
 ### Catalog and planned inventory management
 
@@ -634,8 +841,27 @@ The following GET endpoints do not require authentication:
 - `/api/public/catalog/products/{productId}`: product name, description and
   default price.
 - `/api/public/catalog/products/{productId}/variants`: paginated active
-  variants, including color, size, effective price, quantity available for new reservations,
+  variants, including color, nullable `colorHex`, size, effective price, quantity available for new reservations,
   and whether the quantity is greater than zero.
+
+`colorHex` comes from a case-insensitive name match against that store's saved
+COLOR option; options from another store never supply a swatch. Standard colors
+use a shared frontend palette when no saved swatch exists. Unknown legacy colors
+without a swatch use a neutral striped placeholder, not a guessed color.
+
+Product and quick-add selectors load all variant pages before rendering separate
+horizontal color-circle and size rows. Only distinct attributes present on this
+product are offered, never the full administrative palette or default size list.
+Color names remain accessible labels, without visible captions. Selecting either
+attribute disables incompatible or sold-out choices in the other row, with a gray
+overlay and X. Clicking a selected option again clears it to unlock alternatives.
+Only a real in-stock variant matching both selections can be added or quoted.
+Attributes absent from the product do not create fake color/size controls.
+Visible controls are compact (32px, 24px swatches) with a thin soft-green selected
+outline and a geometrically centered CSS cross. Touch hit areas extend to 44px
+without enlarging their visible shape. Product-link copying uses a small accessible
+link icon beside the description in the upper product summary, with a single custom hover/focus tooltip instead
+of a large labeled button beside the purchase controls.
 
 Only active products with at least one active variant are visible. Inactive
 variants are omitted; active variants with zero stock remain visible and are
@@ -648,7 +874,7 @@ APIs, history and actor details remain private.
 
 The public catalog API has no rate limiting. Production exposure requires an
 abuse-prevention and traffic-limiting decision. Product details and checkout
-screens are not implemented.
+screens consume these contracts; checkout remains authoritative for stock and price.
 
 #### Anonymous shopping cart API
 
@@ -693,7 +919,7 @@ future storefront should update stock visibility in near real time; WebSockets
 are a possible approach, not yet selected or implemented. Client displays
 may lag and must never be treated as an inventory guarantee.
 
-Adding an item to the cart does not reserve it. On choosing to buy, the future
+Adding an item to the cart does not reserve it. On explicitly starting checkout, the
 checkout atomically validates and reserves available stock on the server.
 `POST /api/public/checkout` uses the store hostname and `Cart-Token` to start
 checkout; it returns `ACTIVE`, an ID, expiration and an item list. Each item
@@ -715,19 +941,20 @@ active reservations or deactivate a reserved product or variant return `409`.
 Expired and cancelled reservations are retained; cleanup is not implemented.
 Prices in checkout are snapshots; creating a pending order is not a completed sale.
 
-The future UI must warn before cancellation that it releases the reserved
+The checkout UI warns before cancellation that it releases the reserved
 items and the store cannot guarantee their subsequent availability.
 Competing requests are serialized against inventory and cannot reserve the
 same units twice. Availability can change immediately after a response.
 
-The future checkout UI should show an expiration warning with an OK button
-when the time runs out; pressing it refreshes the page and returns the
-customer to the item page. These are planned behaviors, not implemented
-payment processing, order confirmation, sale deductions, WebSockets or UI.
-Reservation duration configuration, multi-item checkout navigation,
-payment-pending expiry, recovery, cleanup and payment/order revalidation still
-need design before implementation. Production also needs abuse prevention and
-rate limiting; no throughput guarantee is established for live traffic.
+The checkout UI shows an expiration warning, disables order submission and
+offers an explicit new stock/price review. It does not reload or automatically
+return to a single product: a checkout may contain several products, and reloading
+would lose the current delivery choices and pending-request context. This replaces the earlier planned
+warning/OK/reload behavior. No local timer extends reservations. Payment processing,
+order confirmation, sale deductions and WebSockets remain unimplemented.
+Reservation duration configuration, cleanup and future
+payment/order revalidation still need design before implementation.
+No throughput guarantee is established for production traffic.
 
 #### Pending orders
 

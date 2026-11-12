@@ -48,6 +48,10 @@ public class TokenService {
         return new TokenPair(createAccessToken(account, now), refreshToken);
     }
 
+    public String accessToken(MerchantAccount account) {
+        return createAccessToken(account, Instant.now());
+    }
+
     private String createAccessToken(MerchantAccount account, Instant now) {
         JwtClaimsSet claims = JwtClaimsSet.builder()
                 .issuer(issuer)

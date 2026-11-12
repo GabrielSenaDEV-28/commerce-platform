@@ -72,6 +72,9 @@ public class SecurityConfiguration {
                         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/merchants").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/store-auth/login").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/public/store-auth/session/login",
+                                "/api/public/store-auth/session/register", "/api/public/store-auth/session/refresh",
+                                "/api/public/store-auth/session/logout").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/customer-auth/register",
                                 "/api/public/customer-auth/login", "/api/public/customer-auth/refresh",
                                 "/api/public/customer-auth/logout").permitAll()
@@ -86,6 +89,7 @@ public class SecurityConfiguration {
                         .requestMatchers(HttpMethod.GET, "/api/public/pickup").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/public/integrations/melhor-envio/callback").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/cart").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/public/cart/customer").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/public/cart/shipping-estimates",
                                 "/api/public/catalog/products/{productId}/variants/{variantId}/shipping-estimates",
                                 "/api/public/checkout/{reservationId}/shipping-estimates").permitAll()
