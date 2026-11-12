@@ -23,7 +23,7 @@
           <p>Cadastro de clientes: <a [href]="address + '/cadastro'">{{ address }}/cadastro</a>.</p>
         }
         @if (isMerchant() && storeAddress(); as address) { <p>Redirecionando para sua loja...</p><a [href]="address + '/entrar'">Continuar para o login da loja</a> }
-        @else { <a routerLink="/entrar">Ir para o login</a> }
+        @else { <a routerLink="/entrar" queryParamsHandling="preserve">Ir para o login</a> }
         @if (!isMerchant()) { <p class="note"><a routerLink="/">Visitar a loja</a></p> }
       } @else {
         <span class="eyebrow">{{ isMerchant() ? 'PARA LOJISTAS' : 'PARA CLIENTES' }}</span>
@@ -56,7 +56,7 @@
           @if (form.controls.confirmPassword.touched && (form.controls.confirmPassword.invalid || form.controls.password.value !== form.controls.confirmPassword.value)) { <span class="field-error">As senhas devem ser iguais.</span> }
           <button type="submit" class="button" [disabled]="loading()">{{ loading() ? 'Cadastrando...' : 'Criar conta' }}</button>
         </form>
-        <p class="note">Já tem conta? <a [routerLink]="isMerchant() ? '/painel/login' : '/entrar'">Faça login</a>.</p>
+        <p class="note">Já tem conta? <a [routerLink]="isMerchant() ? '/painel/login' : '/entrar'" queryParamsHandling="preserve">Faça login</a>.</p>
       }
       @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
     </div>

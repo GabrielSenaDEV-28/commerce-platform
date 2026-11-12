@@ -1,12 +1,13 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { Router, provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { routes } from '../app.routes';
 import { RegisterComponent } from './register.component';
 import { StoreNavigation } from '../auth/store-navigation.service';
 import { vi } from 'vitest';
+import { AuthService } from '../auth/auth.service';
 
 describe('registration', () => {
   let harness: RouterTestingHarness;
@@ -67,13 +68,14 @@ describe('registration', () => {
   it('registers a customer using the store-scoped endpoint', async () => {
     await harness.navigateByUrl('/cadastro', RegisterComponent);
     fillAccount();
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
     submit();
-    const request = http.expectOne('/api/public/customer-auth/register');
+    const request = http.expectOne('/api/public/store-auth/session/register');
     expect(request.request.body).toEqual({ name: 'Gabriel', email: 'user@example.com', password: 'password1234' });
-    request.flush({}, { status: 201, statusText: 'Created' });
+    request.flush({ accessToken: 'access', tokenType: 'Bearer', expiresIn: 900, accountKind: 'customer', identity: 'customer-id' }, { status: 201, statusText: 'Created' });
     harness.detectChanges();
-    expect(harness.routeNativeElement!.textContent).toContain('Cadastro concluído');
-    expect(harness.routeNativeElement!.querySelector('a[href="/entrar"]')).not.toBeNull();
+    expect(TestBed.inject(AuthService).customerIdentity()).toBe('customer-id');
+    expect(navigate).toHaveBeenCalledWith('/', { replaceUrl: true });
   });
 
   it('rejects invalid subdomain and mismatched or short passwords', async () => {
@@ -100,7 +102,7 @@ describe('registration', () => {
     await harness.navigateByUrl('/cadastro', RegisterComponent);
     fillAccount();
     submit();
-    http.expectOne('/api/public/customer-auth/register').flush({}, { status, statusText: 'Error' });
+    http.expectOne('/api/public/store-auth/session/register').flush({}, { status, statusText: 'Error' });
     harness.detectChanges();
     expect(harness.routeNativeElement!.textContent).toContain(message);
     expect(harness.routeNativeElement!.querySelector('button')!.disabled).toBe(false);

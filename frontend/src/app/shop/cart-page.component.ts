@@ -18,7 +18,7 @@ import { watchUnsavedChanges } from '../unsaved-changes';
       <nav class="breadcrumbs" aria-label="Navegação estrutural"><a routerLink="/">Início</a><span>/</span><span aria-current="page">Sacola</span></nav>
       <span class="overline">SEUS FAVORITOS, JUNTOS</span><h1>Minha sacola.</h1>
       <p class="muted">Adicionar à sacola não reserva estoque. Confira os valores atuais antes de continuar.</p>
-      <p class="muted">A sacola fica nesta página durante a navegação. Recarregar ou fechar a aba perde o acesso a ela.</p>
+      <p class="muted">{{ cart.customer() ? 'Sua sacola está vinculada à conta desta loja e será recuperada ao entrar novamente.' : 'A sacola anônima é mantida nesta aba ao atualizar. Entre na sua conta para recuperá-la também em outra visita ou dispositivo.' }}</p>
       @if (error()) { <p class="field-error">{{ error() }}</p><button type="button" [disabled]="cart.busy()" (click)="load()">Atualizar carrinho</button> }
       @if (cart.busy()) { <p role="status">Atualizando sacola...</p> }
       @if (message()) { <div class="message success" role="status">{{ message() }}</div> }
@@ -42,8 +42,8 @@ import { watchUnsavedChanges } from '../unsaved-changes';
           }
         </section><aside class="cart-summary"><h2>Resumo da sacola</h2><p>{{ cart.count() }} unidade(s)</p><p class="total">{{ total() | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</p><p class="muted">Subtotal dos produtos, sem frete.</p>
           <app-shipping-estimate [quantity]="cart.count()" [disabled]="cart.busy() || !available()" />
-          <hr /><button type="button" class="primary" disabled>Finalização em desenvolvimento</button>
-          <p>Pagamento, parcelamento e conclusão da compra ainda não estão disponíveis. Nenhuma cobrança será feita.</p>
+          <hr /><a class="button" routerLink="/checkout">Continuar para o checkout</a>
+          <p>Entre com sua conta de cliente para reservar os itens e criar um pedido pendente. Pagamento online ainda não está disponível.</p>
         </aside></div>
       } @else if (!cart.busy() && !error()) {
         <section class="empty"><h2>Sua sacola está esperando seus favoritos.</h2><p>Explore a coleção e escolha seu próximo detalhe favorito.</p><a class="button" routerLink="/">Explorar produtos</a></section>

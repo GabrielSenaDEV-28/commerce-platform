@@ -1,5 +1,6 @@
 import { UI } from '../ui/ui';
 import { Component, EventEmitter, Input, Output, signal } from '@angular/core';
+import { DEFAULT_COLORS } from '../ui/variant-colors';
 
 export interface VariantOption { id: string; kind: 'COLOR' | 'SIZE'; name: string; colorHex: string | null }
 
@@ -77,14 +78,7 @@ export class VariantOptionsComponent {
   protected readonly sizeDraft = signal('');
   protected readonly addingColor = signal(false);
   protected readonly addingSize = signal(false);
-  private readonly defaultColors = [
-    ['Preto', '#1d1d1d'], ['Branco', '#ffffff'], ['Cinza', '#8c8c8c'], ['Cinza claro', '#c5c5c5'],
-    ['Azul', '#2563a8'], ['Azul claro', '#8ac5e8'], ['Azul escuro', '#1d345d'],
-    ['Vermelho', '#c52f36'], ['Vermelho claro', '#ef8b8b'], ['Vermelho escuro', '#842d34'],
-    ['Verde', '#389054'], ['Verde claro', '#a8d7a2'], ['Verde escuro', '#20593d'],
-    ['Amarelo', '#efcd48'], ['Laranja', '#e88d3c'], ['Rosa', '#e69db7'], ['Roxo', '#7957a2'],
-    ['Marrom', '#79533b'], ['Bege', '#e4d3b3'],
-  ].map(([name, colorHex]) => ({ name, colorHex }));
+  private readonly defaultColors = DEFAULT_COLORS;
   protected get colors() {
     const defaults = new Set(this.defaultColors.map((option) => option.name.toLowerCase()));
     return [...this.defaultColors, ...this.options.filter((option) => option.kind === 'COLOR' && !defaults.has(option.name.toLowerCase()))];

@@ -24,7 +24,7 @@ describe('public product page', () => {
     ] });
     http = TestBed.inject(HttpTestingController);
   });
-  afterEach(() => http.verify());
+  afterEach(() => { http.verify(); sessionStorage.clear(); });
   it('shows real images with gallery controls, product details and explicit payment limitations', () => {
     const fixture = TestBed.createComponent(ProductPageComponent);
     http.expectOne('/api/public/catalog/products/p1').flush(product); fixture.detectChanges();
@@ -36,6 +36,8 @@ describe('public product page', () => {
     fixture.nativeElement.querySelector('[aria-label="Próxima imagem"]').click(); fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('.main-photo img').getAttribute('src')).toBe(product.photos[0]);
     expect(fixture.nativeElement.querySelector('.description').textContent).toContain('Detalhes do tecido');
+    expect(fixture.nativeElement.querySelector('.description app-copy-link button.icon-action')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.product-summary .description app-copy-link')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('.payment-info').textContent).toContain('ainda não estão disponíveis');
     expect(fixture.nativeElement.querySelector('del')).toBeNull();
   });

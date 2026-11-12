@@ -1,13 +1,16 @@
 <div class="account">
   <header class="header">
     <a class="brand" routerLink="/"> <span>c.</span> commerce</a>
-    <a class="back" routerLink="/">← Voltar para a loja</a>
+    <a class="back" routerLink="/" aria-label="Voltar para a loja"><span aria-hidden="true">←</span><span class="back-label"> Voltar para a loja</span></a>
+    <app-mobile-menu label="Minha conta" side="right" [profile]="true" [busy]="busy()"><ng-container *ngTemplateOutlet="accountMenu" /></app-mobile-menu>
   </header>
   <main class="wrap">
     <nav class="crumb" aria-label="Você está aqui"><a routerLink="/">Início</a><span>/</span><span aria-current="page">Minha conta</span></nav>
+    @if (returnToCheckout) { <p><a class="button" routerLink="/checkout">Voltar ao checkout</a></p> }
     <div class="heading"><span class="overline">SEU ESPAÇO</span><h1>Minha conta<span>.</span></h1><p>Seus dados e suas compras, tudo em um só lugar.</p></div>
     <div class="layout">
-      <aside class="sidebar">
+      <aside class="sidebar"><ng-container *ngTemplateOutlet="accountMenu" /></aside>
+      <ng-template #accountMenu>
         <p>GERENCIAR CONTA</p>
         <nav aria-label="Menu da conta">
           @for (item of [{id: 'perfil', label: 'Dados pessoais'}, {id: 'enderecos', label: 'Endereços'}, {id: 'pedidos', label: 'Meus pedidos'}]; track item.id) {
@@ -15,6 +18,7 @@
             @else { <a [routerLink]="['/conta', item.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ item.label }} <span>›</span></a> }
           }
         </nav>
+        <a routerLink="/favoritos">Meus favoritos</a>
         <details class="future-features"><summary>Em breve</summary><p>Recursos ainda indisponíveis.</p><nav aria-label="Recursos futuros da conta">
           @for (item of [{id: 'pagamentos', label: 'Formas de pagamento'}, {id: 'seguranca', label: 'Segurança e acesso'}]; track item.id) {
             @if (busy()) { <span class="nav-disabled">{{ item.label }}</span> }
@@ -23,13 +27,13 @@
         </nav></details>
         <button class="signout" type="button" (click)="logout()" [disabled]="busy()">{{ busy() ? 'Aguarde...' : 'Sair da conta' }}</button>
         <small>Sua sessão é mantida apenas nesta página e será perdida ao atualizar.</small>
-      </aside>
-      <section class="panel">
+      </ng-template>
+      <section class="panel" [attr.aria-busy]="loading()">
         @if (error()) { <div class="message error" role="alert">{{ error() }} @if (expired()) { <button type="button" (click)="logout()" [disabled]="busy()">Sair da sessão</button> }</div> }
         @if (success()) { <div class="message success" role="status">{{ success() }}</div> }
-        @if (loading()) {
-          <div class="loading" role="status"><span>Carregando seus dados...</span><div></div><div></div><div></div></div>
-        } @else if (section() === 'perfil') {
+        <div class="panel-progress" role="status">{{ loading() ? 'Atualizando seus dados...' : '' }}</div>
+        <div [attr.inert]="loading() ? '' : null">
+        @if (section() === 'perfil') {
           <div class="panel-title"><span class="overline">SOBRE VOCÊ</span><h2>Dados pessoais</h2><p>Mantenha suas informações atualizadas para seus pedidos.</p></div>
           @if (profile(); as info) {
             @if (!editingProfile()) {
@@ -71,7 +75,7 @@
               <div class="actions"><button class="primary" type="submit" [disabled]="busy() || expired()">{{ busy() ? 'Salvando...' : 'Salvar endereço' }}</button><button class="secondary" type="button" [disabled]="busy()" (click)="cancelAddress()">Cancelar</button></div>
             </form>
           } @else {
-            @if (addresses().length === 0 && !error()) { <div class="empty"><span>⌂</span><h3>Nenhum endereço cadastrado</h3><p>Adicione um endereço para usar em seus pedidos.</p></div> }
+            @if (addresses().length === 0 && !error() && !loading()) { <div class="empty"><span>⌂</span><h3>Nenhum endereço cadastrado</h3><p>Adicione um endereço para usar em seus pedidos.</p></div> }
             @for (address of addresses(); track address.id) {
               <app-record-card [staticCard]="true" [label]="'Endereço de ' + address.recipient"><h3>{{ address.recipient }}</h3><p>{{ address.street }}, {{ address.number }} @if (address.complement) { · {{ address.complement }} }<br>{{ address.district }} · {{ address.city }}/{{ address.state }}<br>CEP {{ address.postalCode }}</p>
                 <div recordActions>
@@ -89,7 +93,7 @@
         } @else if (section() === 'pedidos') {
           <div class="panel-title"><span class="overline">SUAS COMPRAS</span><h2>Meus pedidos</h2><p>Acompanhe os pedidos feitos nesta loja.</p></div>
           @if (orders(); as page) {
-            @if (page.content.length === 0) {
+            @if (page.content.length === 0 && !loading()) {
               <div class="empty"><span>◇</span>
                 @if (page.page > 0) {
                   <h3>Não há pedidos nesta página</h3><p>A lista pode ter mudado.</p>
@@ -100,7 +104,7 @@
               </div>
             }
             @for (order of page.content; track order.id) {
-              <app-record-card [staticCard]="true" [label]="'Pedido ' + order.id"><strong>Pedido {{ order.id }}</strong><p>{{ order.createdAt | date:'dd/MM/yyyy HH:mm' }} · {{ order.fulfillmentType === 'PICKUP' ? 'Retirada' : 'Entrega' }}</p><p><span class="status">{{ order.status === 'PENDING' ? 'Pendente' : order.status === 'EXPIRED' ? 'Expirado' : order.status === 'CANCELLED' ? 'Cancelado' : order.status }}</span> · {{ order.total | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</p></app-record-card>
+              <app-record-card [link]="['/conta/pedidos', order.id]" [label]="'Ver pedido ' + order.id"><strong>Pedido {{ order.id }}</strong><p>{{ order.createdAt | date:'dd/MM/yyyy HH:mm' }} · {{ order.fulfillmentType === 'PICKUP' ? 'Retirada' : 'Entrega' }}</p><p><span class="status">{{ order.status === 'PENDING' ? 'Pendente' : order.status === 'EXPIRED' ? 'Expirado' : order.status === 'CANCELLED' ? 'Cancelado' : order.status }}</span> · {{ order.total | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</p></app-record-card>
             }
             @if (page.totalPages > 1) { <div class="actions pagination"><button class="secondary" type="button" [disabled]="page.page === 0" (click)="loadOrders(page.page - 1)">Anterior</button><span>Página {{ page.page + 1 }} de {{ page.totalPages }}</span><button class="secondary" type="button" [disabled]="page.page + 1 >= page.totalPages" (click)="loadOrders(page.page + 1)">Próxima</button></div> }
           } @else if (error() && !expired()) { <button class="secondary" type="button" (click)="retry()">Tentar novamente</button> }
@@ -112,6 +116,7 @@
           <div class="feature"><div><strong>Alterar e-mail</strong><p>Atualização de e-mail ainda não disponível.</p></div><span>EM BREVE</span></div>
           <div class="feature"><div><strong>Alterar senha</strong><p>Alteração e recuperação de senha ainda não disponíveis.</p></div><span>EM BREVE</span></div>
         }
+        </div>
       </section>
     </div>
   </main>

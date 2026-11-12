@@ -14,7 +14,8 @@ nav a { display:flex; justify-content:space-between; padding:13px 12px; text-dec
 nav a.active { background:#edf3eb; color:#294b40; font-weight:700; }
 .disabled-link { padding:13px 12px; color:#aab4aa; font-size:.83rem; }
 .shop { display:block; margin:25px 12px 4px; color:#52705e; font-size:.8rem; }
-.panel { padding:36px; min-height:400px; margin-top:24px; }
+.panel { position:relative; padding:36px; min-height:560px; margin-top:24px; }
+.panel-progress { position:absolute; top:12px; right:24px; color:#627568; font-size:.73rem; }
 .layout .panel { margin:0; }
 h2 { font:400 2rem Georgia,serif; margin:10px 0; }
 .title { display:flex; justify-content:space-between; align-items:center; gap:20px; border-bottom:1px solid #ebefea; padding-bottom:22px; margin-bottom:22px; }
@@ -62,6 +63,10 @@ input[aria-invalid="true"], textarea[aria-invalid="true"], select[aria-invalid="
 .photo-preview { margin:0; flex-basis:100%; }
 .stock-history { margin-top:28px; border-top:1px solid #e9eee7; padding-top:24px; }
 @media(max-width:720px) {
+  .layout > aside, .intro, .desktop-label, .desktop-signout { display:none; }
+  header { position:sticky; top:0; z-index:10; justify-content:space-between; }
+  app-mobile-menu nav { grid-template-columns:1fr; }
+  .layout { margin-top:0; }
   .variant-link { grid-template-columns:minmax(0,1fr) minmax(80px,1fr); gap:12px; }
   .variant-description { grid-column:1 / -1; }
   .card-actions { align-self:flex-start; }

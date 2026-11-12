@@ -1,0 +1,109 @@
+<header class="shop-header"><a class="brand" routerLink="/">c. <span>commerce</span></a><a routerLink="/carrinho">Minha sacola</a></header>
+<main class="shop-wrap">
+  <nav class="breadcrumbs" aria-label="Navegação estrutural"><a routerLink="/">Início</a><span>/</span><a routerLink="/carrinho">Sacola</a><span>/</span><span aria-current="page">Checkout</span></nav>
+  <span class="overline">REVISE CADA DETALHE</span><h1>Seu próximo pedido.</h1>
+  <p class="muted">Esta etapa cria um pedido pendente. Pagamento online ainda não está disponível e nenhuma cobrança será feita.</p>
+  <p class="muted">Sua sacola pode ser recuperada ao entrar novamente. Não atualize durante a criação do pedido: as escolhas de entrega e tentativas incertas ficam apenas na memória desta aba. Se atualizar, consulte seus pedidos antes de tentar outra vez.</p>
+  @if (error()) { <p class="field-error">{{ error() }}</p>
+    @if (profile() && !checkout.pending()) { <button type="button" [disabled]="isSaving()" (click)="load()">Atualizar dados do checkout</button> }
+  }
+  @if (isSaving()) { <p role="status">Conferindo seu checkout...</p> }
+  @if (checkout.order(); as order) {
+    <section class="empty"><h2>Pedido criado.</h2><p>Consulte os dados e o estado atual do pedido. A compra não foi paga.</p><a class="button" [routerLink]="['/conta/pedidos', order.id]">Ver pedido</a>
+      @if (active()) { <p>A sacola permanece vinculada a esta reserva até {{ checkout.reservation()?.expiresAt | date:'dd/MM/yyyy HH:mm:ss' }}. Aguarde o fim do prazo antes de iniciar outro pedido.</p> }
+      @else { <div class="actions"><button type="button" [disabled]="isSaving()" (click)="nextOrder()">Conferir sacola para um novo pedido</button></div> }
+    </section>
+  } @else if (checkout.pending()) {
+    <section class="empty"><h2>Precisamos confirmar o resultado.</h2><p>A conexão falhou durante a criação do pedido. Ele pode ter sido criado. As escolhas estão preservadas: consultar novamente repete a mesma solicitação, sem criar um segundo pedido para esta reserva.</p>
+      <button type="button" class="primary" [disabled]="isSaving()" (click)="submit()">Confirmar resultado do pedido</button>
+      <p>Não inicie outra reserva nem altere a entrega antes de confirmar este resultado.</p>
+      <a routerLink="/conta/pedidos">Consultar meus pedidos</a>
+    </section>
+  } @else if (!profile()) {
+    @if (!loading()) { <button type="button" (click)="load()">Carregar dados novamente</button> }
+  } @else if (!checkout.cart.cart()?.items?.length) {
+    <section class="empty"><h2>Sua sacola está vazia.</h2><a class="button" routerLink="/">Explorar produtos</a></section>
+  } @else {
+    <section class="checkout-panel"><h2>1. Seus dados</h2><p>{{ profile()!.name }} · {{ profile()!.email }}</p><p>{{ profile()!.phone || 'Telefone não informado' }}</p>
+      @if (!profile()!.phone) { <p class="field-error">Cadastre um telefone com DDD antes de criar o pedido.</p> }
+      <a routerLink="/conta/perfil" [queryParams]="{ returnTo: 'checkout' }">Editar dados pessoais</a>
+    </section>
+    @if (!active()) {
+      <section class="checkout-panel"><h2>2. Reserva de estoque</h2>
+        @if (checkout.reservation()) { <p role="status">A reserva não está ativa: expirou, foi cancelada ou nenhum item pôde ser reservado. Inicie uma nova conferência para consultar preço e estoque atuais.</p> }
+        <p>Ao continuar, reservamos os itens disponíveis pelo prazo informado pelo servidor. Preços e quantidades podem mudar desde a sacola.</p>
+        <button type="button" class="primary" [disabled]="isSaving() || !profile()!.phone" (click)="start()">Conferir e reservar itens</button>
+      </section>
+    }
+    @if (checkout.reservation(); as reservation) {
+      <div class="cart-layout"><div>
+        <section class="checkout-panel"><h2>2. Itens da reserva</h2>
+          <button type="button" [disabled]="isSaving()" (click)="refreshReservation()">Conferir estado da reserva</button>
+          @if (active()) { <p role="status">Reserva válida até {{ reservation.expiresAt | date:'dd/MM/yyyy HH:mm:ss' }}. A criação do pedido não estende esse prazo.</p> }
+          @for (item of reservation.items; track item.variantId) {
+            <app-record-card [staticCard]="true" [label]="name(item)"><h3>{{ name(item) }}</h3>
+              <p>{{ item.quantity }} unidade(s) · {{ item.price | currency:'BRL':'symbol':'1.2-2':'pt-BR' }} / unidade</p>
+              @if (!item.reserved) { <p class="field-error">Não reservado: estoque ou disponibilidade insuficiente. Disponível na conferência: {{ item.availableQuantity }}.</p> }
+              @else { <p>Subtotal reservado: {{ item.price * item.quantity | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</p> }
+            </app-record-card>
+          }
+          @if (partialRequired() && active()) {
+            <label class="check-line"><input type="checkbox" [disabled]="isSaving()" [checked]="partial()" (change)="confirmPartial($event)" aria-describedby="partial-note" /> Aceito criar o pedido somente com os itens reservados.</label>
+            <p id="partial-note">Os itens não reservados não serão cobrados nem incluídos neste pedido.</p>
+            @if (submitted() && !partial()) { <p class="field-error">Confirme a compra parcial ou cancele a reserva para revisar a sacola.</p> }
+          }
+        </section>
+        @if (active()) {
+          <section class="checkout-panel"><h2>3. Como receber</h2>
+            <fieldset [disabled]="isSaving()">
+              <legend>Entrega ou retirada</legend>
+              <label class="check-line"><input type="radio" name="fulfillment" [checked]="fulfillment() === 'DELIVERY'" (change)="chooseFulfillment('DELIVERY')" /> Receber no endereço</label>
+              <label class="check-line"><input type="radio" name="fulfillment" [checked]="fulfillment() === 'PICKUP'" [disabled]="!pickup()?.available" (change)="chooseFulfillment('PICKUP')" /> Retirar na loja</label>
+              @if (!pickup()?.available) { <p class="muted">Esta loja não oferece retirada no momento.</p> }
+              @if (fulfillment() === 'DELIVERY') {
+                <label for="checkout-address">Endereço de entrega</label>
+                <select id="checkout-address" [value]="addressId()" (change)="chooseAddress($event)" [attr.aria-invalid]="submitted() && !selectedAddress()" aria-describedby="address-error">
+                  <option value="">Escolha um endereço</option>
+                  @for (address of addresses(); track address.id) { <option [value]="address.id">{{ address.recipient }} · {{ address.street }}, {{ address.number }} · {{ address.city }}/{{ address.state }} · {{ address.postalCode }}</option> }
+                </select>
+                @if (submitted() && !selectedAddress()) { <p class="field-error" id="address-error">Selecione um endereço de entrega.</p> }
+                @if (!addresses().length) { <p>Você ainda não cadastrou um endereço.</p> }
+                <a routerLink="/conta/enderecos" [queryParams]="{ returnTo: 'checkout' }">Cadastrar ou gerenciar endereços</a>
+                @if (selectedAddress(); as address) { <p>{{ address.recipient }} · {{ address.street }}, {{ address.number }} {{ address.complement }} · {{ address.district }} · {{ address.city }}/{{ address.state }} · CEP {{ address.postalCode }}</p> }
+                <div class="actions"><button type="button" [disabled]="!selectedAddress()" (click)="calculate()">Consultar opções de entrega</button></div>
+                @if (quote(); as result) {
+                  <p>Frete válido até {{ result.expiresAt | date:'HH:mm:ss' }}; valor e prazo serão conferidos novamente ao criar o pedido.</p>
+                  @for (service of result.quotes; track service.id) {
+                    <label class="shipping-choice"><input type="radio" name="shipping" [checked]="serviceId() === service.id" (change)="serviceId.set(service.id)" />
+                      <span>{{ service.name }} · {{ service.price | currency:'BRL':'symbol':'1.2-2':'pt-BR' }} · Prazo estimado: {{ service.deliveryDays }} dia(s)</span>
+                    </label>
+                  } @empty { <p>Nenhuma opção de entrega disponível para este endereço e estes itens.</p> }
+                  @if (result.unavailable.length) { <p class="muted">Serviços indisponíveis: @for (service of result.unavailable; track service.id) { {{ service.name }}; }</p> }
+                  @if (!quoteValid()) { <p class="field-error">A cotação expirou. Consulte as opções novamente.</p> }
+                }
+                @if (submitted() && (!selectedService() || !quoteValid())) { <p class="field-error">Consulte e selecione uma opção de entrega válida.</p> }
+              } @else if (pickup()?.address; as address) {
+                <h3>Retirada gratuita</h3><p>{{ address.street }}, {{ address.number }} {{ address.complement }} · {{ address.district }} · {{ address.city }}/{{ address.state }} · CEP {{ address.postalCode }}</p>
+                <p>{{ pickup()?.instructions }}</p><p>O pedido pendente não autoriza retirada. Aguarde a confirmação da loja.</p>
+              }
+            </fieldset>
+          </section>
+        }
+      </div>
+      <aside class="cart-summary"><h2>Resumo do pedido</h2><p>Somente itens reservados: {{ subtotal() | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</p>
+        @if (fulfillment() === 'DELIVERY') { <p>Frete: {{ selectedService() ? (selectedService()!.price | currency:'BRL':'symbol':'1.2-2':'pt-BR') : 'Selecione uma opção' }}</p> }
+        @else { <p>Retirada gratuita</p> }
+        <p class="total">{{ total() | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</p>
+        <p>{{ fulfillment() === 'DELIVERY' && !selectedService() ? 'Subtotal sem frete; selecione a entrega para ver o total.' : 'Total para os itens e recebimento selecionados.' }}</p>
+        <button type="button" class="primary" [disabled]="isSaving() || !active()" (click)="submit()">Criar pedido pendente</button>
+        <p>Não há pagamento nesta etapa. O pedido permanece pendente e pode expirar no prazo da reserva.</p>
+        @if (active()) {
+          @if (!cancelRequested()) { <button type="button" [disabled]="isSaving()" (click)="cancelRequested.set(true)">Cancelar reserva e revisar sacola</button> }
+          @else { <p role="alert">Cancelar libera os itens reservados. A loja não pode garantir o estoque ou o preço em uma nova tentativa.</p>
+            <div class="actions"><button type="button" [disabled]="isSaving()" (click)="cancel()">Liberar reserva e voltar à sacola</button><button type="button" [disabled]="isSaving()" (click)="cancelRequested.set(false)">Manter reserva</button></div>
+          }
+        }
+      </aside></div>
+    }
+  }
+</main><footer class="shop-footer">commerce. · Uma loja feita para você.</footer>

@@ -16,7 +16,7 @@ describe('cart review', () => {
     TestBed.configureTestingModule({ providers: [provideRouter([]), provideHttpClient(), provideHttpClientTesting()] });
     http = TestBed.inject(HttpTestingController);
   });
-  afterEach(() => http.verify());
+  afterEach(() => { http.verify(); sessionStorage.clear(); });
   it('shows an honest empty state without creating server state', () => {
     const fixture = TestBed.createComponent(CartPageComponent); fixture.detectChanges();
     expect(fixture.nativeElement.textContent).toContain('Sua sacola está esperando');

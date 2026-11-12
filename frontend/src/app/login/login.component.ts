@@ -3,7 +3,7 @@ import { Component, DestroyRef, inject, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { AuthService, loginError, safeReturnUrl } from '../auth/auth.service';
+import { AuthService, loginError } from '../auth/auth.service';
 import { UI } from '../ui/ui';
 
 @Component({
@@ -44,10 +44,9 @@ export class LoginComponent {
     this.loading.set(true); this.error.set('');
     const { email, password } = this.form.getRawValue();
     this.auth.loginStore(email.trim(), password).pipe(takeUntilDestroyed(this.destroy)).subscribe({
-      next: (kind) => {
+      next: () => {
         this.form.controls.password.reset(); this.loading.set(false);
-        const destination = safeReturnUrl(this.route.snapshot.queryParamMap.get('returnUrl'), kind);
-        void this.router.navigateByUrl(destination ?? (kind === 'merchant' ? '/painel/categorias?inicio=1' : '/conta/perfil'), { replaceUrl: true });
+        void this.router.navigateByUrl('/', { replaceUrl: true });
       },
       error: (error: unknown) => { this.loading.set(false); this.error.set(loginError(error, 'customer')); },
     });

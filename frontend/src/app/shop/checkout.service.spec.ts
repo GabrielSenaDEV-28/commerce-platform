@@ -1,0 +1,121 @@
+import { provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { TestBed } from '@angular/core/testing';
+import { AuthService } from '../auth/auth.service';
+import { CartService } from './cart.service';
+import { CheckoutService } from './checkout.service';
+import { CreateOrder } from './checkout.models';
+
+describe('checkout requests and recovery', () => {
+  let http: HttpTestingController;
+  let checkout: CheckoutService;
+  let cart: CartService;
+  const body: CreateOrder = { acceptPartial: false, fulfillmentType: 'PICKUP', addressId: null, quoteId: null, shippingServiceId: null };
+  beforeEach(() => {
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+    http = TestBed.inject(HttpTestingController);
+    checkout = TestBed.inject(CheckoutService); cart = TestBed.inject(CartService);
+    TestBed.inject(AuthService).loginStore('customer@example.com', 'password').subscribe();
+    http.expectOne('/api/public/store-auth/session/login').flush({ accountKind: 'customer', identity: 'customer-id', accessToken: 'customer-token', refreshToken: 'r', expiresIn: 900 });
+    cart.add('p1', 'v1', 1).subscribe();
+    http.expectOne('/api/public/cart/customer').flush({ token: 'cart-token', cart: { items: [] } });
+    http.expectOne('/api/public/cart').flush({ items: [] });
+    http.expectOne('/api/public/cart/items/p1/v1').flush({ items: [{ productId: 'p1', variantId: 'v1', quantity: 1 }] });
+    checkout.start().subscribe();
+    http.expectOne('/api/public/checkout').flush({ id: 'r1', status: 'ACTIVE', expiresAt: '2099-01-01T00:00:00Z', items: [] });
+  });
+  afterEach(() => http.verify());
+  it('uses the reservation-specific quote and sends IDs, not browser prices, to create an order', () => {
+    checkout.quote('01001000').subscribe();
+    const quote = http.expectOne('/api/public/checkout/r1/shipping-estimates');
+    expect(quote.request.headers.get('Cart-Token')).toBe('cart-token');
+    expect(quote.request.body).toEqual({ postalCode: '01001000' });
+    quote.flush({ quoteId: 'q1', reservationId: 'r1', quotes: [] });
+    const delivery: CreateOrder = { ...body, fulfillmentType: 'DELIVERY', addressId: 'a1', quoteId: 'q1', shippingServiceId: 1 };
+    checkout.create(delivery).subscribe();
+    const create = http.expectOne('/api/public/checkout/r1/orders');
+    expect(create.request.body).toEqual(delivery);
+    expect(create.request.headers.get('Authorization')).toBe('Bearer customer-token');
+    expect(create.request.headers.get('Cart-Token')).toBe('cart-token');
+    create.flush({ id: 'o1' });
+    expect(checkout.order()?.id).toBe('o1');
+    expect(checkout.pending()).toBeNull();
+    expect(cart.busy()).toBe(false);
+  });
+  it('keeps the original request after uncertain failure and serializes it against cart writes', () => {
+    checkout.create(body).subscribe({ error: () => undefined });
+    const create = http.expectOne('/api/public/checkout/r1/orders');
+    cart.remove('p1', 'v1').subscribe({ error: () => undefined });
+    http.expectNone('/api/public/cart/items/p1/v1');
+    create.flush({}, { status: 503, statusText: 'Unavailable' });
+    expect(checkout.pending()?.body).toEqual(body);
+    checkout.cancel().subscribe({ error: () => undefined });
+    http.expectNone('/api/public/checkout/r1/cancel');
+    checkout.create({ ...body, acceptPartial: true }).subscribe();
+    const retry = http.expectOne('/api/public/checkout/r1/orders');
+    expect(retry.request.body).toEqual(body);
+    retry.flush({ id: 'original-order' });
+    expect(checkout.order()?.id).toBe('original-order');
+  });
+  it('clears a definitive rejection so the customer can explicitly revise the selection', () => {
+    checkout.create(body).subscribe({ error: () => undefined });
+    http.expectOne('/api/public/checkout/r1/orders').flush({ code: 'SHIPPING_QUOTE_CHANGED' }, { status: 409, statusText: 'Conflict' });
+    expect(checkout.pending()).toBeNull();
+    checkout.cancel().subscribe();
+    http.expectOne('/api/public/checkout/r1/cancel').flush({ id: 'r1', status: 'CANCELLED', items: [] });
+    expect(checkout.reservation()?.status).toBe('CANCELLED');
+  });
+  it('preserves uncertain recovery across session expiry instead of changing the request after login', () => {
+    checkout.create(body).subscribe({ error: () => undefined });
+    http.expectOne('/api/public/checkout/r1/orders').error(new ProgressEvent('error'));
+    checkout.create(body).subscribe({ error: () => undefined });
+    http.expectOne('/api/public/checkout/r1/orders').flush({}, { status: 401, statusText: 'Unauthorized' });
+    expect(checkout.pending()?.body).toEqual(body);
+    checkout.start().subscribe({ error: () => undefined });
+    http.expectNone('/api/public/checkout');
+    checkout.create(body).subscribe({ error: () => undefined });
+    http.expectOne('/api/public/checkout/r1/orders').flush({}, { status: 429, statusText: 'Too Many Requests' });
+    expect(checkout.pending()?.body).toEqual(body);
+  });
+  it('releases the busy lock when headers are unavailable instead of blocking subsequent operations', () => {
+    const newCart = TestBed.runInInjectionContext(() => new CartService());
+    let failed = false;
+    newCart.setQuantity('p1', 'v1', 1).subscribe({ error: () => failed = true });
+    expect(failed).toBe(true);
+    expect(newCart.busy()).toBe(false);
+    newCart.load().subscribe((value) => expect(value?.items).toEqual([]));
+    http.expectOne('/api/public/cart/customer').flush({ token: 'recovered', cart: { items: [] } });
+  });
+  it('clears checkout state when a different customer signs in instead of exposing the previous attempt', () => {
+    checkout.create(body).subscribe({ error: () => undefined });
+    http.expectOne('/api/public/checkout/r1/orders').error(new ProgressEvent('error'));
+    expect(checkout.pending()).not.toBeNull();
+    TestBed.inject(AuthService).loginStore('another@example.com', 'password').subscribe();
+    http.expectOne('/api/public/store-auth/session/login').flush({ accountKind: 'customer', identity: 'another-id', accessToken: 'other', refreshToken: 'r', expiresIn: 900 });
+    expect(checkout.pending()).toBeNull(); expect(checkout.reservation()).toBeNull();
+  });
+  it('retains the exact uncertain attempt when the same customer reauthenticates', () => {
+    checkout.create(body).subscribe({ error: () => undefined });
+    http.expectOne('/api/public/checkout/r1/orders').error(new ProgressEvent('error'));
+    TestBed.inject(AuthService).loginStore('CUSTOMER@example.com', 'password').subscribe();
+    http.expectOne('/api/public/store-auth/session/login').flush({ accountKind: 'customer', identity: 'customer-id', accessToken: 'new-access', refreshToken: 'r', expiresIn: 900 });
+    expect(checkout.pending()?.body).toEqual(body);
+    cart.load().subscribe();
+    http.expectOne('/api/public/cart/customer').flush({ token: 'new-cart-access', cart: { items: [] } });
+    checkout.create(body).subscribe();
+    const retry = http.expectOne('/api/public/checkout/r1/orders');
+    expect(retry.request.body).toEqual(body);
+    expect(retry.request.headers.get('Cart-Token')).toBe('new-cart-access');
+    retry.flush({ id: 'original' });
+  });
+  it('keeps the reservation and exact uncertain attempt during transparent refresh', () => {
+    checkout.create(body).subscribe({ error: () => undefined });
+    http.expectOne('/api/public/checkout/r1/orders').error(new ProgressEvent('error'));
+    TestBed.inject(AuthService).restore().subscribe();
+    http.expectOne('/api/public/store-auth/session/refresh').flush({ accountKind: 'customer', identity: 'customer-id', accessToken: 'renewed', expiresIn: 900 });
+    expect(checkout.pending()?.body).toEqual(body);
+    expect(checkout.reservation()?.id).toBe('r1');
+    expect(cart.headers().get('Cart-Token')).toBe('cart-token');
+    http.expectNone('/api/public/cart/customer');
+  });
+});

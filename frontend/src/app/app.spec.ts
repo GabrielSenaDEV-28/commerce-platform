@@ -13,6 +13,7 @@ import { EditableRouteReuseStrategy } from './editable-route-reuse.strategy';
 import { vi } from 'vitest';
 import { DOCUMENT } from '@angular/common';
 import { MerchantAdminComponent } from './merchant-admin/merchant-admin.component';
+import { StorefrontComponent } from './storefront/storefront.component';
 
 describe('login routes', () => {
   let harness: RouterTestingHarness;
@@ -20,7 +21,7 @@ describe('login routes', () => {
 
   beforeEach(async () => {
     TestBed.configureTestingModule({
-      providers: [provideRouter(routes), { provide: RouteReuseStrategy, useClass: EditableRouteReuseStrategy },
+      providers: [provideRouter(routes.map((route) => route.component === StorefrontComponent ? { ...route, canMatch: undefined } : route)), { provide: RouteReuseStrategy, useClass: EditableRouteReuseStrategy },
         provideHttpClient(withInterceptors([sessionInterceptor])), provideHttpClientTesting()],
     });
     for (const component of [LoginComponent, MerchantAdminComponent]) {
@@ -61,31 +62,32 @@ describe('login routes', () => {
     await harness.navigateByUrl('/entrar', LoginComponent);
     submit();
     expect(harness.routeNativeElement!.textContent).toContain('Informe um e-mail válido');
-    http.expectNone('/api/public/store-auth/login');
+    http.expectNone('/api/public/store-auth/session/login');
     fill('#email', 'customer@example.com');
     fill('#password', 'secret');
     submit();
     expect(harness.routeNativeElement!.textContent).toContain('Entrando...');
-    http.expectOne('/api/public/store-auth/login').flush({}, { status: 401, statusText: 'Unauthorized' });
+    http.expectOne('/api/public/store-auth/session/login').flush({}, { status: 401, statusText: 'Unauthorized' });
     harness.detectChanges();
     expect(harness.routeNativeElement!.textContent).toContain('E-mail ou senha inválidos');
     expect(harness.routeNativeElement!.querySelector('button')!.disabled).toBe(false);
   });
 
-  it('identifies the owner from the server response and opens administration', async () => {
+  it('identifies the owner from the server response and opens the storefront', async () => {
     await harness.navigateByUrl('/entrar?returnUrl=%2Fpainel%2Fperfil', LoginComponent);
     fill('#email', 'merchant@example.com');
     fill('#password', 'secret');
     submit();
-    http.expectOne('/api/public/store-auth/login').flush({
-      accessToken: 'access', refreshToken: 'refresh', tokenType: 'Bearer', expiresIn: 900, accountKind: 'merchant',
+    http.expectOne('/api/public/store-auth/session/login').flush({
+      accessToken: 'access', refreshToken: 'refresh', tokenType: 'Bearer', expiresIn: 900, accountKind: 'merchant', identity: 'merchant-id',
     });
     await harness.fixture.whenStable();
-    http.expectOne('/api/store/me').flush({ name: 'Loja', subdomain: 'loja' });
+    http.expectOne((req) => req.url === '/api/public/catalog/products').flush({ content: [], page: 0, totalPages: 0, totalElements: 0 });
     harness.detectChanges();
-    expect(TestBed.inject(Router).url).toBe('/painel/perfil');
+    expect(TestBed.inject(Router).url).toBe('/');
     expect(TestBed.inject(AuthService).accountKind()).toBe('merchant');
-    expect(harness.routeNativeElement!.textContent).toContain('Perfil e loja');
+    expect(harness.routeNativeElement!.textContent).toContain('Administração');
+    http.expectNone('/api/store/me');
   });
 
   it('cancels the pending login when leaving its route', async () => {
@@ -93,7 +95,7 @@ describe('login routes', () => {
     fill('#email', 'customer@example.com');
     fill('#password', 'secret');
     submit();
-    const request = http.expectOne('/api/public/store-auth/login');
+    const request = http.expectOne('/api/public/store-auth/session/login');
     await harness.navigateByUrl('/cadastro', RegisterComponent);
     expect(request.cancelled).toBe(true);
     harness.detectChanges();
@@ -108,13 +110,15 @@ describe('login routes', () => {
     expect(harness.routeNativeElement!.textContent).toContain('Este caminho não existe');
   });
 
-  it('preserves a protected destination and returns there after login', async () => {
+  it('opens the storefront after login instead of a previous protected settings destination', async () => {
     await harness.navigateByUrl('/conta/pagamentos', LoginComponent);
     expect(TestBed.inject(Router).url).toContain('returnUrl=%2Fconta%2Fpagamentos');
     fill('#email', 'customer@example.com'); fill('#password', 'secret'); submit();
-    http.expectOne('/api/public/store-auth/login').flush({ accessToken: 'access', refreshToken: 'refresh', tokenType: 'Bearer', expiresIn: 900, accountKind: 'customer' });
+    http.expectOne('/api/public/store-auth/session/login').flush({ accessToken: 'access', refreshToken: 'refresh', tokenType: 'Bearer', expiresIn: 900, accountKind: 'customer', identity: 'customer-id' });
     await harness.fixture.whenStable();
-    expect(TestBed.inject(Router).url).toBe('/conta/pagamentos');
+    expect(TestBed.inject(Router).url).toBe('/');
+    http.expectOne((req) => req.url === '/api/public/catalog/products').flush({ content: [], page: 0, totalPages: 0, totalElements: 0 });
+    http.expectOne('/api/public/cart/customer').flush({ token: 'customer-cart', cart: { items: [] } });
   });
 
   it('asks before leaving a modified form and keeps it when discard is rejected', async () => {
@@ -158,11 +162,11 @@ describe('login routes', () => {
     await harness.navigateByUrl('/cadastro', RegisterComponent);
     fill('#name', 'Cliente'); fill('#email', 'customer@example.com');
     fill('#password', 'password1234'); fill('#confirmPassword', 'password1234'); submit();
-    const request = http.expectOne('/api/public/customer-auth/register');
+    const request = http.expectOne('/api/public/store-auth/session/register');
     await harness.navigateByUrl('/entrar');
     expect(TestBed.inject(Router).url).toBe('/cadastro');
     expect(request.cancelled).toBe(false);
-    request.flush(null);
+    request.flush({}, { status: 503, statusText: 'Unavailable' });
   });
 
   it('expires a dirty authenticated page without blocking on the discard prompt', async () => {

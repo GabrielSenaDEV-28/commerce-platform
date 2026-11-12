@@ -16,7 +16,7 @@
       </form><p class="note">Ainda não tem uma loja? <a routerLink="/painel/cadastro">Crie sua loja na Commerce</a>.</p>
     } @else {
       <span class="eyebrow">SUA CONTA NA LOJA</span><h2 id="login-title">Entre na sua conta</h2>
-      @if (expired()) { <p class="error" role="alert">Sua sessão expirou ou não é mais válida. Entre novamente para continuar de onde parou. Alterações não salvas precisam ser preenchidas novamente.</p> }
+      @if (expired()) { <p class="error" role="alert">Sua sessão expirou ou não é mais válida. Entre novamente para acessar a loja. Alterações não salvas precisam ser preenchidas novamente.</p> }
       <form [attr.inert]="loading() ? '' : null" [formGroup]="form" (ngSubmit)="submit()" novalidate>
         <label for="email">E-mail</label><input id="email" type="email" formControlName="email" autocomplete="username" [attr.aria-invalid]="form.controls.email.touched && form.controls.email.invalid" />
         @if (form.controls.email.touched && form.controls.email.invalid) { <p class="field-error">Informe um e-mail válido.</p> }
@@ -24,7 +24,7 @@
         @if (form.controls.password.touched && form.controls.password.invalid) { <p class="field-error">Informe sua senha.</p> }
         <button type="submit" class="button" [disabled]="loading()">{{ loading() ? 'Entrando...' : 'Entrar' }}</button>
       </form>
-      <p class="note">Ainda não tem conta nesta loja? <a routerLink="/cadastro">Cadastre-se</a>.</p>
+      <p class="note">Ainda não tem conta nesta loja? <a routerLink="/cadastro" queryParamsHandling="preserve">Cadastre-se</a>.</p>
       <p class="note">Ainda não há recuperação de senha nesta versão.</p>
     }
     @if (error()) { <p class="error" role="alert">{{ error() }}</p> }

@@ -1,5 +1,6 @@
 import { UI } from '../ui/ui';
-import { CurrencyPipe, DatePipe, DOCUMENT } from '@angular/common';
+import { CurrencyPipe, DatePipe, DOCUMENT, NgTemplateOutlet } from '@angular/common';
+import { MobileMenuComponent } from '../ui/mobile-menu.component';
 import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
 import { Component, DestroyRef, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
@@ -20,7 +21,7 @@ interface StoreInfo { name: string; subdomain: string }
 
 @Component({
   selector: 'app-merchant-admin',
-  imports: [...UI, ReactiveFormsModule, RouterLink, RouterLinkActive, CurrencyPipe, DatePipe, VariantOptionsComponent, CopyLinkComponent],
+  imports: [...UI, ReactiveFormsModule, RouterLink, RouterLinkActive, CurrencyPipe, DatePipe, VariantOptionsComponent, CopyLinkComponent, NgTemplateOutlet, MobileMenuComponent],
   templateUrl: './merchant-admin.component.html',
   styleUrl: './merchant-admin.component.css',
 })
@@ -81,7 +82,9 @@ export class MerchantAdminComponent {
           return;
         }
         if (this.sameStore()) this.route.paramMap.pipe(takeUntilDestroyed(this.destroy)).subscribe((params) => {
-          this.section.set(params.get('section') ?? 'categorias');
+          const section = params.get('section') ?? 'categorias';
+          if (section !== this.section()) this.list.set(null);
+          this.section.set(section);
           this.active.set(true); this.formOpen.set(false); this.error.set(''); this.success.set('');
           const editId = this.route.snapshot.queryParamMap.get('editar');
           if (editId && (this.section() === 'categorias' || this.section() === 'produtos')) {
@@ -117,8 +120,7 @@ export class MerchantAdminComponent {
   protected load(page: number): void {
     this.listRequest?.unsubscribe();
     const section = this.section();
-    this.list.set(null);
-    if (!['categorias', 'produtos', 'pedidos'].includes(section)) { this.loading.set(false); return; }
+    if (!['categorias', 'produtos', 'pedidos'].includes(section)) { this.list.set(null); this.loading.set(false); return; }
     this.loading.set(true); this.error.set('');
     const path = section === 'categorias' ? '/api/item-types' : section === 'produtos' ? '/api/products' : '/api/orders';
     const params: Record<string, string | number | boolean> = { page, size: 20 };
@@ -128,7 +130,10 @@ export class MerchantAdminComponent {
       error: (error: unknown) => { this.loading.set(false); this.handleError(error); },
     });
   }
-  protected setActive(value: boolean): void { this.active.set(value); this.load(0); }
+  protected setActive(value: boolean): void {
+    if (this.loading() || this.active() === value) return;
+    this.list.set(null); this.active.set(value); this.load(0);
+  }
   protected openItem(item?: TypeItem): void {
     if (this.hasUnsavedChanges() && !confirmDiscard(this.document.defaultView)) return;
     this.editing.set(item?.id ?? null);

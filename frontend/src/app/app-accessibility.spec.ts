@@ -3,11 +3,12 @@ import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { vi } from 'vitest';
 import { App } from './app';
+import { provideHttpClient } from '@angular/common/http';
 
 describe('skip navigation', () => {
   it('moves focus into the routed main content without changing the route fragment', () => {
     const focus = vi.fn(); const scrollIntoView = vi.fn();
-    TestBed.configureTestingModule({ providers: [provideRouter([])] });
+    TestBed.configureTestingModule({ providers: [provideRouter([]), provideHttpClient()] });
     TestBed.overrideComponent(App, { add: { providers: [{ provide: DOCUMENT, useValue: {
       getElementById: (id: string) => id === 'main-content' ? { focus, scrollIntoView } : null,
     } }] } });

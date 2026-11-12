@@ -1,9 +1,10 @@
 import { Component, inject } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
 import { RouterOutlet } from '@angular/router';
+import { CartRecoveryComponent } from './shop/cart-recovery.component';
 
 @Component({
-  imports: [RouterOutlet],
+  imports: [RouterOutlet, CartRecoveryComponent],
   selector: 'app-root',
   styleUrl: './app.css',
   templateUrl: './app.html',
