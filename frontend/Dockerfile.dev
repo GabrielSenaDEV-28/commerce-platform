@@ -1,0 +1,10 @@
+FROM node:24-bookworm-slim
+
+WORKDIR /app
+ENV NG_CLI_ANALYTICS=false
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY . .
+
+EXPOSE 4200
+CMD ["npm", "start", "--", "--configuration", "docker"]

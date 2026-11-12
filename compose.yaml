@@ -1,0 +1,107 @@
+name: commerce-platform
+
+services:
+  dev-secrets:
+    image: node:24-bookworm-slim
+    command: ["node", "/opt/dev-secrets.cjs"]
+    volumes:
+      - ./docker/dev-secrets.cjs:/opt/dev-secrets.cjs:ro
+      - dev-secrets:/run/dev-secrets
+    restart: "no"
+
+  database:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: commerce_platform
+      POSTGRES_USER: commerce
+      POSTGRES_PASSWORD_FILE: /run/dev-secrets/database-password
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - database-data:/var/lib/postgresql/data
+      - dev-secrets:/run/dev-secrets:ro
+    depends_on:
+      dev-secrets:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U commerce -d commerce_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    environment:
+      DATABASE_URL: jdbc:postgresql://database:5432/commerce_platform
+      DATABASE_USERNAME: commerce
+      STOREFRONT_BASE_DOMAIN: localhost
+      STORE_SESSION_COOKIE_SECURE: "false"
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - dev-secrets:/run/dev-secrets:ro
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/actuator/health"]
+      interval: 5s
+      timeout: 5s
+      start_period: 60s
+      retries: 24
+    develop:
+      watch:
+        - action: rebuild
+          path: ./src/main
+        - action: rebuild
+          path: ./pom.xml
+        - action: rebuild
+          path: ./docker/backend.Dockerfile
+        - action: rebuild
+          path: ./docker/backend-entrypoint.sh
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "127.0.0.1:4200:4200"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4200').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 12
+    develop:
+      watch:
+        - action: sync
+          path: ./frontend/src
+          target: /app/src
+          initial_sync: true
+        - action: sync
+          path: ./frontend/public
+          target: /app/public
+          initial_sync: true
+        - action: rebuild
+          path: ./frontend/package.json
+        - action: rebuild
+          path: ./frontend/package-lock.json
+        - action: rebuild
+          path: ./frontend/angular.json
+        - action: rebuild
+          path: ./frontend/tsconfig.json
+        - action: rebuild
+          path: ./frontend/tsconfig.app.json
+        - action: rebuild
+          path: ./frontend/proxy.docker.conf.json
+        - action: rebuild
+          path: ./frontend/Dockerfile.dev
+
+volumes:
+  database-data:
+  dev-secrets:

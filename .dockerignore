@@ -1,0 +1,15 @@
+.git
+.idea
+.copilot
+.env
+.env.*
+!.env.example
+**/node_modules
+**/.angular
+**/dist
+**/target
+frontend
+docs
+README.md
+HELP.md
+*.log
