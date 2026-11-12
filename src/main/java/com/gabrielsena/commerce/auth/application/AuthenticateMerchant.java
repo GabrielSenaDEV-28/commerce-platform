@@ -30,6 +30,11 @@ public class AuthenticateMerchant {
 
     @Transactional
     public TokenPair execute(String email, String password) {
+        return tokenService.issue(authenticate(email, password));
+    }
+
+    @Transactional(readOnly = true)
+    public MerchantAccount authenticate(String email, String password) {
         String normalizedEmail = RegisterMerchant.normalizeEmail(email);
         MerchantAccount account = accountRepository.findByEmail(normalizedEmail).orElse(null);
         String passwordHash = account == null || account.getPasswordHash() == null
@@ -41,6 +46,6 @@ public class AuthenticateMerchant {
             throw new InvalidCredentialsException();
         }
 
-        return tokenService.issue(account);
+        return account;
     }
 }

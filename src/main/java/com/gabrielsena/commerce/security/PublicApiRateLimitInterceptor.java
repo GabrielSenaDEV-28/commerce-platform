@@ -59,7 +59,7 @@ public class PublicApiRateLimitInterceptor implements HandlerInterceptor {
         if (!(handler instanceof HandlerMethod method)) return null;
         Class<?> type = method.getBeanType();
         String name = method.getMethod().getName();
-        if (type == ShoppingCartController.class && name.equals("create")) {
+        if (type == ShoppingCartController.class && (name.equals("create") || name.equals("recover"))) {
             return PublicApiRateLimiter.Category.CART_CREATE;
         }
         if (type == ShippingEstimateController.class

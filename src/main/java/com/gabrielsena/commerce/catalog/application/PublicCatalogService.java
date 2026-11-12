@@ -25,7 +25,7 @@ public class PublicCatalogService {
     }
 
     public record PublicProduct(UUID id, String name, String description, BigDecimal price, List<String> photos) { }
-    public record PublicVariant(UUID id, String color, String size, BigDecimal price, int quantity, boolean available) { }
+    public record PublicVariant(UUID id, String color, String colorHex, String size, BigDecimal price, int quantity, boolean available) { }
 
     private static final String VISIBLE_PRODUCT = """
             p.store_id = ? AND p.active = true AND EXISTS (
@@ -81,18 +81,20 @@ public class PublicCatalogService {
                 WHERE store_id = ? AND product_id = ? AND active = true
                 """, Long.class, store, productId);
         List<PublicVariant> result = jdbc.query("""
-                SELECT v.variant_id, v.color, v.size, COALESCE(v.price, p.price) AS effective_price,
+                SELECT v.variant_id, v.color, o.color_hex, v.size, COALESCE(v.price, p.price) AS effective_price,
                        s.quantity AS quantity
                 FROM catalog_product_variants v
                 JOIN catalog_products p ON p.store_id = v.store_id AND p.product_id = v.product_id
                 JOIN inventory_available_stock s ON s.store_id = v.store_id AND s.product_id = v.product_id
                                                 AND s.variant_id = v.variant_id
+                LEFT JOIN store_variant_options o ON o.store_id = v.store_id AND o.kind = 'COLOR'
+                                                  AND lower(o.name) = lower(v.color)
                 WHERE v.store_id = ? AND v.product_id = ? AND v.active = true AND p.active = true
                 ORDER BY v.variant_id LIMIT ? OFFSET ?
                 """, (rs, row) -> {
                     int quantity = rs.getInt("quantity");
                     return new PublicVariant(rs.getObject("variant_id", UUID.class), rs.getString("color"),
-                            rs.getString("size"), rs.getBigDecimal("effective_price"), quantity, quantity > 0);
+                            rs.getString("color_hex"), rs.getString("size"), rs.getBigDecimal("effective_price"), quantity, quantity > 0);
                 }, store, productId, page.getPageSize(), page.getOffset());
         return new PageImpl<>(result, page, Objects.requireNonNull(count));
     }

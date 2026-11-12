@@ -66,6 +66,11 @@ public class CustomerAuthService {
 
     @Transactional
     public TokenPair login(UUID store, String email, String password) {
+        return issue(store, authenticate(store, email, password).id());
+    }
+
+    @Transactional(readOnly = true)
+    public Customer authenticate(UUID store, String email, String password) {
         List<Account> rows = jdbc.query("""
                 SELECT customer_id, name, email, password_hash FROM customer_accounts WHERE store_id = ? AND email = ?
                 """, (rs, row) -> new Account(new Customer(rs.getObject(1, UUID.class), rs.getString(2),
@@ -75,7 +80,7 @@ public class CustomerAuthService {
         if (account == null || !matches) {
             throw new InvalidCredentialsException();
         }
-        return issue(store, account.customer().id());
+        return account.customer();
     }
 
     @Transactional
@@ -119,6 +124,24 @@ public class CustomerAuthService {
         return result.getFirst();
     }
 
+    public boolean exists(UUID store, UUID customer) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM customer_accounts WHERE store_id = ? AND customer_id = ?)",
+                Boolean.class, store, customer));
+    }
+
+    public String accessToken(UUID store, UUID customer) {
+        return accessToken(store, customer, Instant.now());
+    }
+
+    private String accessToken(UUID store, UUID customer, Instant now) {
+        JwtClaimsSet claims = JwtClaimsSet.builder().issuer(issuer).issuedAt(now)
+                .expiresAt(now.plusSeconds(TokenService.ACCESS_TOKEN_SECONDS)).subject(customer.toString())
+                .claim("account_type", "customer").claim("store_id", store.toString()).build();
+        return encoder.encode(JwtEncoderParameters.from(
+                JwsHeader.with(MacAlgorithm.HS256).build(), claims)).getTokenValue();
+    }
+
     private TokenPair issue(UUID store, UUID customer) {
         Instant now = Instant.now();
         String refresh = OpaqueTokens.generate();
@@ -126,12 +149,7 @@ public class CustomerAuthService {
                 INSERT INTO customer_refresh_tokens (token_hash, store_id, customer_id, expires_at)
                 VALUES (?, ?, ?, ?)
                 """, OpaqueTokens.hash(refresh), store, customer, java.sql.Timestamp.from(now.plusSeconds(7 * 86400L)));
-        JwtClaimsSet claims = JwtClaimsSet.builder().issuer(issuer).issuedAt(now)
-                .expiresAt(now.plusSeconds(TokenService.ACCESS_TOKEN_SECONDS)).subject(customer.toString())
-                .claim("account_type", "customer").claim("store_id", store.toString()).build();
-        String access = encoder.encode(JwtEncoderParameters.from(
-                JwsHeader.with(MacAlgorithm.HS256).build(), claims)).getTokenValue();
-        return new TokenPair(access, refresh);
+        return new TokenPair(accessToken(store, customer, now), refresh);
     }
 
     private static String normalize(String email) {

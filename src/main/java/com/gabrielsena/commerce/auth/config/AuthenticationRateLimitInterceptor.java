@@ -2,6 +2,7 @@ package com.gabrielsena.commerce.auth.config;
 
 import com.gabrielsena.commerce.auth.api.AuthController;
 import com.gabrielsena.commerce.auth.api.StoreAuthController;
+import com.gabrielsena.commerce.auth.api.StoreSessionController;
 import com.gabrielsena.commerce.auth.application.AuthenticationRateLimiter;
 import com.gabrielsena.commerce.auth.application.AuthenticationRateLimiter.Category;
 import com.gabrielsena.commerce.customer.api.CustomerAuthController;
@@ -70,10 +71,12 @@ public class AuthenticationRateLimitInterceptor implements HandlerInterceptor {
         Class<?> type = method.getBeanType();
         String name = method.getMethod().getName();
         if (type == MerchantController.class && name.equals("onboard")
-                || type == CustomerAuthController.class && name.equals("register")) {
+                || type == CustomerAuthController.class && name.equals("register")
+                || type == StoreSessionController.class && name.equals("register")) {
             return Category.REGISTER;
         }
-        if (type == AuthController.class || type == CustomerAuthController.class || type == StoreAuthController.class) {
+        if (type == AuthController.class || type == CustomerAuthController.class || type == StoreAuthController.class
+                || type == StoreSessionController.class) {
             return switch (name) {
                 case "login" -> Category.LOGIN;
                 case "refresh" -> Category.REFRESH;
