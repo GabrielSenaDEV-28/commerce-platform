@@ -57,4 +57,19 @@ describe('copy share links', () => {
     expect(fixture.nativeElement.querySelector('input').value).toBe('http://loja.localhost:4200/');
     expect(writeText).not.toHaveBeenCalled();
   });
+  it('offers an accessible icon with one custom tooltip instead of a visible product-link button label', async () => {
+    const fixture = TestBed.createComponent(CopyLinkComponent);
+    fixture.componentRef.setInput('path', '/produtos/p1');
+    fixture.componentRef.setInput('iconOnly', true);
+    fixture.componentRef.setInput('label', 'Copiar link do produto');
+    fixture.detectChanges();
+    const button = fixture.nativeElement.querySelector('button') as HTMLButtonElement;
+    expect(button.getAttribute('aria-label')).toBe('Copiar link do produto');
+    expect(button.hasAttribute('title')).toBe(false);
+    expect(button.querySelector('svg')).not.toBeNull();
+    expect(button.querySelector('.copy-tooltip')!.textContent).toBe('Copiar link do produto');
+    button.click(); await fixture.whenStable(); fixture.detectChanges();
+    expect(writeText).toHaveBeenCalledWith('http://loja.localhost:4200/produtos/p1');
+    expect(fixture.nativeElement.querySelector('[role="status"]').textContent).toContain('Link copiado');
+  });
 });

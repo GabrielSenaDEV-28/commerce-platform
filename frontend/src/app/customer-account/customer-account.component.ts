@@ -1,5 +1,6 @@
 import { UI } from '../ui/ui';
-import { CurrencyPipe, DatePipe, DOCUMENT } from '@angular/common';
+import { CurrencyPipe, DatePipe, DOCUMENT, NgTemplateOutlet } from '@angular/common';
+import { MobileMenuComponent } from '../ui/mobile-menu.component';
 import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
 import { Component, DestroyRef, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
@@ -9,13 +10,7 @@ import { EMPTY, Observable, catchError, distinctUntilChanged, map, switchMap, ta
 import { AuthService } from '../auth/auth.service';
 import { confirmDiscard, watchUnsavedChanges } from '../unsaved-changes';
 import { applyServerFieldErrors } from '../ui/validation';
-
-interface Profile { name: string; email: string; phone: string | null }
-interface AddressInput {
-  recipient: string; postalCode: string; street: string; number: string;
-  complement: string; district: string; city: string; state: string;
-}
-interface Address extends AddressInput { id: string; country: string }
+import { AddressInput, CustomerAddress as Address, CustomerProfile as Profile } from './customer.models';
 interface OrderSummary { id: string; status: string; createdAt: string; total: number; fulfillmentType: string }
 interface OrderPage { content: OrderSummary[]; page: number; totalPages: number }
 type Section = 'perfil' | 'enderecos' | 'pedidos' | 'pagamentos' | 'seguranca';
@@ -25,7 +20,7 @@ const requiredText = (max: number) => [Validators.required, Validators.pattern(/
 
 @Component({
   selector: 'app-customer-account',
-  imports: [...UI, ReactiveFormsModule, RouterLink, RouterLinkActive, CurrencyPipe, DatePipe],
+  imports: [...UI, ReactiveFormsModule, RouterLink, RouterLinkActive, CurrencyPipe, DatePipe, NgTemplateOutlet, MobileMenuComponent],
   templateUrl: './customer-account.component.html',
   styleUrl: './customer-account.component.css',
 })
@@ -38,6 +33,7 @@ export class CustomerAccountComponent {
   private readonly auth = inject(AuthService);
   private readonly document = inject(DOCUMENT);
   protected readonly section = signal<Section>('perfil');
+  protected readonly returnToCheckout = this.route.snapshot.queryParamMap.get('returnTo') === 'checkout';
   protected readonly loading = signal(false);
   protected readonly busy = signal(false);
   protected readonly error = signal('');

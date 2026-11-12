@@ -55,6 +55,36 @@ describe('merchant administration', () => {
     expect(fixture.nativeElement.querySelector('a[href="http://outra.localhost:4200/entrar"]')).not.toBeNull();
     http.expectNone((req) => req.url === '/api/item-types');
   });
+  it('preserves the panel and sidebar while switching sections and leaves the new heading visible during loading', () => {
+    const { fixture, store } = setup();
+    store.flush({ name: 'Loja', subdomain: 'loja' });
+    request('/api/item-types').flush({ content: [{ id: 't1', name: 'Roupas', hasColor: true, hasSize: true }], page: 0, totalPages: 1, totalElements: 1 });
+    fixture.detectChanges();
+    const panel = fixture.nativeElement.querySelector('.panel');
+    const sidebar = fixture.nativeElement.querySelector('aside');
+    params.next(convertToParamMap({ section: 'produtos' })); fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.panel')).toBe(panel);
+    expect(fixture.nativeElement.querySelector('aside')).toBe(sidebar);
+    expect(panel.getAttribute('aria-busy')).toBe('true');
+    expect(panel.querySelector('h2')!.textContent).toBe('Produtos');
+    expect(panel.textContent).not.toContain('Roupas');
+    request('/api/products').flush({ content: [], page: 0, totalPages: 0, totalElements: 0 }); fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.panel')).toBe(panel);
+    expect(panel.getAttribute('aria-busy')).toBe('false');
+    http.expectNone('/api/store/me');
+  });
+  it('keeps current records mounted and inert during pagination instead of clearing the panel', () => {
+    const { fixture, store } = setup();
+    store.flush({ name: 'Loja', subdomain: 'loja' });
+    request('/api/item-types').flush({ content: [{ id: 't1', name: 'Roupas', hasColor: true, hasSize: true }], page: 0, totalPages: 2, totalElements: 21 });
+    fixture.detectChanges();
+    const card = fixture.nativeElement.querySelector('app-record-card');
+    fixture.nativeElement.querySelectorAll('.pagination button')[1].click(); fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('app-record-card')).toBe(card);
+    expect(card.closest('[inert]')).not.toBeNull();
+    request('/api/item-types').flush({ content: [], page: 1, totalPages: 2, totalElements: 21 }); fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.panel').getAttribute('aria-busy')).toBe('false');
+  });
 
   it('creates categories and lists products for the authenticated store', () => {
     const { fixture, store } = setup();

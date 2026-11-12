@@ -29,7 +29,7 @@ describe('management view after save', () => {
     }
     http = TestBed.inject(HttpTestingController);
     TestBed.inject(AuthService).loginStore('owner@example.com', 'password').subscribe();
-    http.expectOne('/api/public/store-auth/login').flush({ accessToken: 'access', refreshToken: 'refresh', expiresIn: 900, tokenType: 'Bearer', accountKind: 'merchant' });
+    http.expectOne('/api/public/store-auth/session/login').flush({ accessToken: 'access', refreshToken: 'refresh', expiresIn: 900, tokenType: 'Bearer', accountKind: 'merchant', identity: 'merchant-id' });
     harness = await RouterTestingHarness.create();
   });
   afterEach(() => http.verify());

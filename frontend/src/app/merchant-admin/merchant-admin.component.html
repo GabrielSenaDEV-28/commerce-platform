@@ -1,5 +1,5 @@
 <div class="admin">
-  <header><a routerLink="/" class="brand">c. <span>commerce</span></a><span>ÁREA DO LOJISTA</span><button type="button" (click)="logout()" [disabled]="busy()">Sair</button></header>
+  <header><a routerLink="/" class="brand">c. <span>commerce</span></a><span class="desktop-label">ÁREA DO LOJISTA</span><button class="desktop-signout" type="button" (click)="logout()" [disabled]="busy()">Sair</button><app-mobile-menu label="Administração" side="right" [profile]="true" [busy]="busy()">@if (sameStore()) { <ng-container *ngTemplateOutlet="adminMenu" /> }<button type="button" (click)="logout()" [disabled]="busy()">Sair da conta</button></app-mobile-menu></header>
   <main>
     <div class="intro"><span class="overline">GESTÃO DA LOJA</span><h1>Seu espaço de administração<span>.</span></h1><p>Organize seu catálogo e acompanhe seus pedidos.</p></div>
     @if (error() && !formOpen()) { <div class="message error" role="alert">{{ error() }}</div> }
@@ -9,9 +9,7 @@
         @if (localAddress(); as address) { <a [href]="address">{{ address }}</a> }
       </div>
     }
-    @if (sameStore()) {
-      <div class="layout">
-        <aside><p>{{ store()?.name }}</p><nav aria-label="Administração">
+        <ng-template #adminMenu><p>{{ store()?.name }}</p><nav aria-label="Administração">
           @for (link of [{id:'perfil',name:'Perfil e loja'}, {id:'categorias',name:'Categorias'}, {id:'produtos',name:'Produtos'}, {id:'pedidos',name:'Pedidos'}]; track link.id) {
             @if (busy()) { <span class="disabled-link">{{ link.name }}</span> }
             @else { <a [routerLink]="['/painel', link.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ link.name }} <span>›</span></a> }
@@ -23,11 +21,15 @@
               @else { <a [routerLink]="['/painel', link.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ link.name }} <small>Em breve</small></a> }
             }</nav>
           </details>
-          <a class="shop" routerLink="/">← Ver minha loja</a></aside>
-        <section class="panel">
+          <a class="shop" routerLink="/">← Ver minha loja</a></ng-template>
+    @if (sameStore()) {
+      <div class="layout">
+        <aside><ng-container *ngTemplateOutlet="adminMenu" /></aside>
+        <section class="panel" [attr.aria-busy]="loading()">
           @if (success()) { <div class="message success" role="status">{{ success() }}</div> }
-          @if (loading()) { <p role="status">Carregando...</p> }
-          @else if (section() === 'perfil') {
+          <div class="panel-progress" role="status">{{ loading() ? 'Atualizando dados...' : '' }}</div>
+          <div [attr.inert]="loading() ? '' : null">
+          @if (section() === 'perfil') {
             <div class="title"><div><span class="overline">MINHA LOJA</span><h2>Perfil e loja</h2><p>Dados atuais da sua loja.</p></div></div>
             <p><strong>Nome da loja:</strong> {{ store()?.name }}</p>
             <p><strong>Subdomínio:</strong> {{ store()?.subdomain }}</p>
@@ -121,6 +123,7 @@
           }
           @if (list(); as page) { @if (!formOpen() && page.totalPages > 1) { <div class="actions pagination"><button type="button" [disabled]="page.page === 0" (click)="load(page.page - 1)">Anterior</button><span>Página {{ page.page + 1 }} de {{ page.totalPages }}</span><button type="button" [disabled]="page.page + 1 >= page.totalPages" (click)="load(page.page + 1)">Próxima</button></div> } }
           @if (error() && !loading() && !formOpen() && !list()) { <button type="button" (click)="load(0)">Tentar novamente</button> }
+          </div>
         </section>
       </div>
     }

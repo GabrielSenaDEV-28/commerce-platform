@@ -2,16 +2,50 @@
   <div class="announcement">BEM-VINDO À NOSSA LOJA <span aria-hidden="true">✦</span> ENCONTRE SEU PRÓXIMO FAVORITO</div>
   <header class="header">
     <div class="header-inner">
+      <app-mobile-menu label="Explorar loja" [busy]="cart.busy()">
+        <a class="mobile-menu-home" routerLink="/">Início</a>
+        <a routerLink="/favoritos">Meus favoritos</a>
+        <span class="mobile-menu-unavailable">Categorias <small>Em breve</small></span>
+        <span class="mobile-menu-unavailable">Ofertas <small>Em breve</small></span>
+        <p class="mobile-menu-note">Categorias e ofertas ainda não estão disponíveis.</p>
+      </app-mobile-menu>
       <a class="wordmark" routerLink="/" aria-label="Commerce, início da loja"><span class="mark">c.</span><span>commerce<small> SUA LOJA ONLINE</small></span></a>
       <nav class="desktop-nav" aria-label="Navegação principal">
         <a href="#colecao">Explorar produtos</a>
+        <a routerLink="/favoritos">Favoritos</a>
         <span class="muted-nav">Categorias <small>em breve</small></span>
       </nav>
       <div class="header-actions">
+        <app-mobile-menu [label]="auth.accountKind() === 'merchant' ? 'Administração' : 'Minha conta'" side="right" [profile]="true" [busy]="cart.busy() || signingOut()">
+          <nav aria-label="Opções da conta">
+            <a routerLink="/favoritos">Meus favoritos</a>
+            @if (auth.accountKind() === 'customer') {
+              <a routerLink="/conta/perfil">Dados pessoais</a>
+              <a routerLink="/conta/enderecos">Endereços</a>
+              <a routerLink="/conta/pedidos">Meus pedidos</a>
+              <a routerLink="/conta/pagamentos">Formas de pagamento <small>Em breve</small></a>
+              <a routerLink="/conta/seguranca">Segurança e acesso <small>Em breve</small></a>
+            } @else if (auth.accountKind() === 'merchant') {
+              <a routerLink="/painel/perfil">Perfil e loja</a>
+              <a routerLink="/painel/categorias">Categorias</a>
+              <a routerLink="/painel/produtos">Produtos</a>
+              <a routerLink="/painel/pedidos">Pedidos</a>
+              <a routerLink="/painel/promocoes">Promoções <small>Em breve</small></a>
+              <a routerLink="/painel/vendas">Painel de vendas <small>Em breve</small></a>
+              <a routerLink="/painel/funcionarios">Funcionários <small>Em breve</small></a>
+              <a routerLink="/painel/personalizacao">Personalizar loja <small>Em breve</small></a>
+            } @else {
+              <a routerLink="/entrar">Entrar na minha conta</a>
+              <a routerLink="/cadastro">Criar conta</a>
+            }
+          </nav>
+          @if (auth.accountKind()) { <button type="button" [disabled]="cart.busy() || signingOut()" (click)="logout()">{{ signingOut() ? 'Saindo...' : 'Sair da conta' }}</button> }
+          @if (logoutError()) { <p class="field-error">{{ logoutError() }}</p> }
+        </app-mobile-menu>
         @if (auth.accountKind() === 'merchant') {
-          <a class="icon-action" routerLink="/painel/perfil" aria-label="Administração da loja"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 10h16v10H4zM3 10l2-6h14l2 6M9 20v-6h6v6"/></svg><span>Administração</span></a>
+          <a class="icon-action desktop-account" routerLink="/painel/perfil" aria-label="Administração da loja"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 10h16v10H4zM3 10l2-6h14l2 6M9 20v-6h6v6"/></svg><span>Administração</span></a>
         } @else {
-        <a class="icon-action" [routerLink]="auth.accountKind() === 'customer' ? '/conta/perfil' : '/entrar'" [attr.aria-label]="auth.accountKind() === 'customer' ? 'Minha conta' : 'Entrar na minha conta'">
+        <a class="icon-action desktop-account" [routerLink]="auth.accountKind() === 'customer' ? '/conta/perfil' : '/entrar'" [attr.aria-label]="auth.accountKind() === 'customer' ? 'Minha conta' : 'Entrar na minha conta'">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="8" r="3.3"/><path d="M5 20c0-3.5 2.8-5.8 7-5.8s7 2.3 7 5.8"/></svg>
           <span>{{ auth.accountKind() === 'customer' ? 'Minha conta' : 'Entrar' }}</span>
         </a>
@@ -54,6 +88,8 @@
           <p>Mais opções para personalizar sua experiência estão a caminho.</p>
         </aside>
         <div class="catalog-content" aria-live="polite" [attr.aria-busy]="loading()">
+          @if (actionMessage()) { <p class="catalog-feedback" role="status">{{ actionMessage() }}</p> }
+          @if (favorites.error()) { <p class="field-error">{{ favorites.error() }} <a routerLink="/favoritos">Gerenciar favoritos</a></p> }
           @if (loading()) {
             <p class="sr-only" role="status">Carregando produtos...</p>
             <div class="product-grid skeleton-grid" aria-hidden="true">
@@ -76,15 +112,7 @@
             } @else {
               <div class="product-grid">
                 @for (product of result.content; track product.id) {
-                  <article class="product-card">
-                    <a class="product-destination" [routerLink]="['/produtos', product.id]" [attr.aria-label]="'Ver ' + product.name"></a>
-                    <div class="product-image">
-                      @if (product.photos.length) { <img [src]="product.photos[0]" [alt]="product.name" loading="lazy" /> }
-                      @else { <span aria-label="Produto sem foto">✳</span> }
-                    </div>
-                    <div class="product-info"><h3>{{ product.name }}</h3><p>{{ product.description }}</p><strong>{{ product.price | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</strong><small>Preço padrão; variantes podem ter outro valor.</small></div>
-                    <button class="catalog-add" type="button" [disabled]="cart.busy()" (click)="openPurchase(product)">Adicionar ao carrinho</button>
-                  </article>
+                  <app-product-card [product]="product" [busy]="cart.busy()" [inCart]="cart.contains(product.id)" [favorited]="favorites.has(product.id)" (cartAction)="cartAction(product)" (favoriteAction)="toggleFavorite(product)" />
                 }
               </div>
               @if (result.totalPages > 1) {
@@ -103,8 +131,16 @@
   <dialog #quickBuy aria-labelledby="quick-buy-title" (cancel)="closePurchase($event)" (close)="buying.set(null)">
     @if (buying(); as product) {
       <div class="dialog-heading"><div><span class="overline">ESCOLHA SEU FAVORITO</span><h2 id="quick-buy-title">{{ product.name }}</h2></div><button type="button" aria-label="Fechar seleção" [disabled]="cart.busy()" (click)="closePurchase()">✕</button></div>
-      @defer (when buying()) { <app-purchase-options [product]="product" [showShipping]="false" /> }
+      @defer (when buying()) { <app-purchase-options [product]="product" [showShipping]="false" (additionConfirmed)="purchaseConfirmed(product)" /> }
       <a [routerLink]="['/produtos', product.id]">Ver fotos e detalhes do produto</a>
+    }
+  </dialog>
+  <dialog #removeConfirm aria-labelledby="remove-product-title" (cancel)="closeRemoval($event)">
+    @if (removing(); as product) {
+      <h2 id="remove-product-title">Retirar {{ product.name }}?</h2>
+      <p>Todas as cores, tamanhos e quantidades deste produto serão removidos da sacola.</p>
+      @if (actionError()) { <p class="field-error">{{ actionError() }}</p><a routerLink="/carrinho">Conferir sacola</a> }
+      <div class="removal-actions"><button type="button" class="primary" [disabled]="cart.busy()" (click)="removeProduct()">Retirar todas as variantes</button><button autofocus type="button" [disabled]="cart.busy()" (click)="closeRemoval()">Manter na sacola</button></div>
     }
   </dialog>
   <footer class="footer"><div class="wrap footer-inner"><div><strong>commerce<span>.</span></strong><p>Uma loja feita para você.</p></div><p>Uma experiência em construção, com carinho.</p></div></footer>

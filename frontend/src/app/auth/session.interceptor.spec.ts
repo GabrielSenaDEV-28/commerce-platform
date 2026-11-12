@@ -43,4 +43,57 @@ describe('session interceptor', () => {
     expect(auth.merchantAccessToken()).toBe('new');
     expect(TestBed.inject(Router).navigate).not.toHaveBeenCalled();
   });
+  function browserLogin(): void {
+    auth.loginStore('user@example.com', 'password').subscribe();
+    http.expectOne('/api/public/store-auth/session/login').flush({
+      accessToken: 'browser-token', tokenType: 'Bearer', expiresIn: 900, accountKind: 'merchant', identity: 'merchant-id',
+    });
+  }
+  it('renews once for simultaneous authenticated 401s and retries with the new access token', () => {
+    browserLogin();
+    const received = vi.fn();
+    for (const url of ['/api/one', '/api/two']) {
+      client.get(url, { headers: { Authorization: 'Bearer browser-token' } }).subscribe(received);
+    }
+    http.expectOne('/api/one').flush({}, { status: 401, statusText: 'Unauthorized' });
+    http.expectOne('/api/two').flush({}, { status: 401, statusText: 'Unauthorized' });
+    const refresh = http.expectOne('/api/public/store-auth/session/refresh');
+    refresh.flush({ accessToken: 'renewed', tokenType: 'Bearer', expiresIn: 900, accountKind: 'merchant', identity: 'merchant-id' });
+    for (const url of ['/api/one', '/api/two']) {
+      const retry = http.expectOne(url);
+      expect(retry.request.headers.get('Authorization')).toBe('Bearer renewed');
+      retry.flush({});
+    }
+    expect(received).toHaveBeenCalledTimes(2);
+    expect(TestBed.inject(Router).navigate).not.toHaveBeenCalled();
+  });
+  it('never retries uncertain writes and preserves the session on renewal infrastructure failure', () => {
+    browserLogin();
+    client.post('/api/write', {}, { headers: { Authorization: 'Bearer browser-token' } }).subscribe({ error: () => undefined });
+    http.expectOne('/api/write').error(new ProgressEvent('error'));
+    http.expectNone('/api/public/store-auth/session/refresh');
+    client.get('/api/private', { headers: { Authorization: 'Bearer browser-token' } }).subscribe({ error: () => undefined });
+    http.expectOne('/api/private').flush({}, { status: 401, statusText: 'Unauthorized' });
+    http.expectOne('/api/public/store-auth/session/refresh').flush({}, { status: 503, statusText: 'Unavailable' });
+    expect(auth.merchantAccessToken()).toBe('browser-token');
+    expect(auth.restorationError()).not.toBe('');
+    http.expectNone('/api/private');
+  });
+  it('does not renew recursively when the cookie or retried access is rejected', () => {
+    browserLogin();
+    client.get('/api/private', { headers: { Authorization: 'Bearer browser-token' } }).subscribe({ error: () => undefined });
+    http.expectOne('/api/private').flush({}, { status: 401, statusText: 'Unauthorized' });
+    http.expectOne('/api/public/store-auth/session/refresh').flush({ accessToken: 'renewed', tokenType: 'Bearer', expiresIn: 900, accountKind: 'merchant', identity: 'merchant-id' });
+    http.expectOne('/api/private').flush({}, { status: 401, statusText: 'Unauthorized' });
+    http.expectNone('/api/public/store-auth/session/refresh');
+    expect(auth.accountKind()).toBeNull();
+  });
+  it('does not replay a request under another account restored from a changed cookie', () => {
+    browserLogin();
+    client.post('/api/write', {}, { headers: { Authorization: 'Bearer browser-token' } }).subscribe({ error: () => undefined });
+    http.expectOne('/api/write').flush({}, { status: 401, statusText: 'Unauthorized' });
+    http.expectOne('/api/public/store-auth/session/refresh').flush({ accessToken: 'other', tokenType: 'Bearer', expiresIn: 900, accountKind: 'merchant', identity: 'other-merchant' });
+    http.expectNone('/api/write');
+    expect(auth.merchantAccessToken()).toBe('other');
+  });
 });

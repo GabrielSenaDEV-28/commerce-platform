@@ -19,3 +19,4 @@ h2 { font:400 1.7rem Georgia,serif; } p { font-size:.85rem; line-height:1.8; } .
 @media(max-width:800px) { .product-layout, .cart-layout { grid-template-columns:1fr; gap:24px; }.shop-header { padding:20px; }.shop-wrap { width:calc(100% - 40px); }.product-summary { padding:0; } }
 @media(prefers-reduced-motion:reduce) { .product-layout, .shimmer { animation:none; } }
 @media(max-width:480px) { .shop-header { flex-wrap:wrap; }.shop-header nav { gap:12px; }.cart-summary { padding:18px; }.breadcrumbs { overflow-wrap:anywhere; } }
+@media(max-width:720px) { .shop-header { position:sticky; top:0; z-index:10; padding:14px 20px; gap:12px; } .shop-header .brand { font-size:1.35rem; } .shop-header nav a { min-height:44px; display:inline-flex; align-items:center; } }

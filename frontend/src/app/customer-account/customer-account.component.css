@@ -19,7 +19,8 @@
 .sidebar nav a.active { color: #294b40; background: #edf3eb; font-weight: 700; }
 .signout { margin-top: 16px; width: 100%; text-align: left; }
 .sidebar small { display: block; margin: 12px; color: #87948a; font-size: .71rem; line-height: 1.5; }
-.panel { padding: 38px; min-height: 420px; }
+.panel { position:relative; padding: 38px; min-height: 560px; }
+.panel-progress { position:absolute; top:12px; right:24px; color:#627568; font-size:.73rem; }
 .panel-title { border-bottom: 1px solid #ebefea; padding-bottom: 26px; margin-bottom: 26px; }
 .panel-title h2 { font: 400 2rem Georgia, serif; margin: 10px 0; }
 form { max-width: 580px; display: flex; flex-direction: column; }
@@ -48,9 +49,5 @@ form small, .optional { color: #8b988d; font-size: .73rem; margin-top: 7px; }
 .message button { display: block; margin-top: 10px; }
 .error { color: #8c342d; background: #fbefed; }
 .success { color: #315d42; background: #ecf5eb; }
-.loading { color: #748a78; font-size: .85rem; }
-.loading div { height: 48px; margin-top: 20px; background: linear-gradient(90deg, #f0f3ed, #fafbf8, #f0f3ed); background-size: 200% 100%; animation: shimmer 1.4s infinite; }
-@keyframes shimmer { to { background-position: -200% 0; } }
-@media (max-width: 720px) { .layout { grid-template-columns: 1fr; } .sidebar nav { grid-template-columns: repeat(2, 1fr); } .sidebar { padding: 20px; } .panel { padding: 24px; } .crumb { margin-bottom: 28px; } }
-@media (prefers-reduced-motion: reduce) { .loading div { animation: none; } }
-@media(max-width:480px) { .header { flex-wrap:wrap; padding:16px 20px; }.panel { padding:18px; }.wrap { width:calc(100% - 32px); } }
+@media (max-width: 720px) { .layout { grid-template-columns: 1fr; } .sidebar { display:none; } .panel { padding: 24px; } .crumb { margin-bottom: 28px; } .header { position:sticky; top:0; z-index:10; gap:8px; } .heading { display:none; } .back { font-size:.72rem; } }
+@media(max-width:480px) { .header { flex-wrap:nowrap; padding:8px 16px; }.back { display:grid; place-items:center; width:44px; height:44px; }.back-label { display:none; }.panel { padding:18px; }.wrap { width:calc(100% - 32px); } }

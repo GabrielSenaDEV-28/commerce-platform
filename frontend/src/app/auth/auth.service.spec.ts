@@ -57,6 +57,77 @@ describe('AuthService', () => {
     expect(auth.accountKind()).toBeNull();
   });
 
+  const browserTokens = { accessToken: 'browser-access', tokenType: 'Bearer', expiresIn: 900, accountKind: 'customer', identity: 'customer-id' };
+  it('restores a browser session from its cookie without storing or exposing a refresh token', () => {
+    const stored = vi.spyOn(Storage.prototype, 'setItem');
+    const changes = vi.fn(); auth.sessionChanges.subscribe(changes);
+    auth.restore().subscribe();
+    const refresh = http.expectOne('/api/public/store-auth/session/refresh');
+    expect(refresh.request.body).toEqual({});
+    expect(refresh.request.headers.get('X-Store-Session')).toBe('1');
+    expect(auth.restoring()).toBe(true);
+    refresh.flush(browserTokens);
+    expect(auth.customerIdentity()).toBe('customer-id');
+    expect(auth.customerAccessToken()).toBe('browser-access');
+    expect(auth.restoring()).toBe(false);
+    expect(changes).toHaveBeenCalledWith('login');
+    expect(stored).not.toHaveBeenCalled();
+  });
+  it('deduplicates refreshes and renews without restarting account recovery', () => {
+    auth.restore().subscribe();
+    http.expectOne('/api/public/store-auth/session/refresh').flush(browserTokens);
+    const changes = vi.fn(); auth.sessionChanges.subscribe(changes);
+    auth.restore().subscribe(); auth.restore().subscribe();
+    http.expectOne('/api/public/store-auth/session/refresh').flush({ ...browserTokens, accessToken: 'renewed' });
+    expect(auth.customerAccessToken()).toBe('renewed');
+    expect(changes.mock.calls).toEqual([['refresh']]);
+  });
+  it('treats a missing cookie as a visitor but makes infrastructure failures visible and retryable', () => {
+    auth.restore().subscribe();
+    http.expectOne('/api/public/store-auth/session/refresh').flush({}, { status: 401, statusText: 'Unauthorized' });
+    expect(auth.accountKind()).toBeNull(); expect(auth.restorationError()).toBe('');
+    auth.restore().subscribe();
+    http.expectOne('/api/public/store-auth/session/refresh').flush({}, { status: 503, statusText: 'Unavailable' });
+    expect(auth.restorationError()).not.toBe('');
+    auth.restore().subscribe();
+    http.expectOne('/api/public/store-auth/session/refresh').flush(browserTokens);
+    expect(auth.accountKind()).toBe('customer'); expect(auth.restorationError()).toBe('');
+  });
+  it('keeps an existing session on refresh failure and revokes it through cookie logout', () => {
+    auth.restore().subscribe();
+    http.expectOne('/api/public/store-auth/session/refresh').flush(browserTokens);
+    auth.restore().subscribe();
+    http.expectOne('/api/public/store-auth/session/refresh').error(new ProgressEvent('error'));
+    expect(auth.customerAccessToken()).toBe('browser-access');
+    expect(auth.restorationError()).not.toBe('');
+    auth.logout().subscribe();
+    const logout = http.expectOne('/api/public/store-auth/session/logout');
+    expect(logout.request.headers.get('X-Store-Session')).toBe('1');
+    expect(logout.request.body).toEqual({});
+    logout.flush(null);
+    expect(auth.accountKind()).toBeNull(); expect(auth.restorationError()).toBe('');
+  });
+  it('does not restore a delayed refresh after confirmed logout', () => {
+    auth.restore().subscribe();
+    http.expectOne('/api/public/store-auth/session/refresh').flush(browserTokens);
+    auth.restore().subscribe();
+    const delayed = http.expectOne('/api/public/store-auth/session/refresh');
+    auth.logout().subscribe();
+    http.expectOne('/api/public/store-auth/session/logout').flush(null);
+    delayed.flush({ ...browserTokens, accessToken: 'too-late' });
+    expect(auth.accountKind()).toBeNull();
+  });
+  it('renews before access expiration instead of logging out on the local timer', () => {
+    vi.useFakeTimers();
+    auth.restore().subscribe();
+    http.expectOne('/api/public/store-auth/session/refresh').flush({ ...browserTokens, expiresIn: 4 });
+    vi.advanceTimersByTime(2999);
+    http.expectNone('/api/public/store-auth/session/refresh');
+    vi.advanceTimersByTime(1);
+    http.expectOne('/api/public/store-auth/session/refresh').flush(browserTokens);
+    expect(auth.accountKind()).toBe('customer');
+  });
+
   it('expires the session at the duration returned by the server and preserves the destination', () => {
     vi.useFakeTimers();
     const router = TestBed.inject(Router);

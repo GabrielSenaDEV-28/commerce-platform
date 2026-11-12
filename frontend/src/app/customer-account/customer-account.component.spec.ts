@@ -9,6 +9,7 @@ import { routes } from '../app.routes';
 import { AuthService } from '../auth/auth.service';
 import { CustomerAccountComponent } from './customer-account.component';
 import { LoginComponent } from '../login/login.component';
+import { StorefrontComponent } from '../storefront/storefront.component';
 
 describe('customer account', () => {
   let harness: RouterTestingHarness;
@@ -20,7 +21,7 @@ describe('customer account', () => {
 
   beforeEach(async () => {
     registerLocaleData(localePt);
-    TestBed.configureTestingModule({ providers: [provideRouter(routes), provideHttpClient(), provideHttpClientTesting()] });
+    TestBed.configureTestingModule({ providers: [provideRouter(routes.map((route) => route.component === StorefrontComponent ? { ...route, canMatch: undefined } : route)), provideHttpClient(), provideHttpClientTesting()] });
     TestBed.overrideComponent(LoginComponent, { add: { providers: [{ provide: DOCUMENT, useValue: {
       location: { hostname: 'loja.localhost' }, defaultView: window,
     } }] } });
@@ -61,14 +62,17 @@ describe('customer account', () => {
     http.expectNone('/api/public/customer/profile');
   });
 
-  it('redirects after customer login and loads and updates the profile', async () => {
+  it('opens the storefront after customer login and can then open and update the profile', async () => {
     await harness.navigateByUrl('/entrar', LoginComponent);
     fill('#email', 'ana@example.com');
     fill('#password', 'password');
     submit();
-    http.expectOne('/api/public/store-auth/login').flush({ accessToken: 'access', refreshToken: 'refresh', tokenType: 'Bearer', expiresIn: 900, accountKind: 'customer' });
+    http.expectOne('/api/public/store-auth/session/login').flush({ accessToken: 'access', refreshToken: 'refresh', tokenType: 'Bearer', expiresIn: 900, accountKind: 'customer', identity: 'customer-id' });
     await harness.fixture.whenStable();
-    expect(TestBed.inject(Router).url).toBe('/conta/perfil');
+    expect(TestBed.inject(Router).url).toBe('/');
+    http.expectOne((req) => req.url === '/api/public/catalog/products').flush({ content: [], page: 0, totalPages: 0, totalElements: 0 });
+    http.expectOne('/api/public/cart/customer').flush({ token: 'customer-cart', cart: { items: [] } });
+    await harness.navigateByUrl('/conta/perfil', CustomerAccountComponent);
     request('/api/public/customer/profile').flush(profile);
     harness.detectChanges();
     expect(text()).toContain('Dados pessoais');
@@ -151,11 +155,12 @@ describe('customer account', () => {
     expect(text()).toContain('Nenhum pedido por aqui');
   });
 
-  it('opens the account instead of the login screen for a signed-in customer', async () => {
+  it('opens the storefront instead of the login screen for a signed-in customer', async () => {
     signIn();
-    await harness.navigateByUrl('/entrar', CustomerAccountComponent);
-    request('/api/public/customer/profile').flush(profile);
-    expect(TestBed.inject(Router).url).toBe('/conta/perfil');
+    await harness.navigateByUrl('/entrar', StorefrontComponent);
+    http.expectOne((req) => req.url === '/api/public/catalog/products').flush({ content: [], page: 0, totalPages: 0, totalElements: 0 });
+    http.expectOne('/api/public/cart/customer').flush({ token: 'customer-cart', cart: { items: [] } });
+    expect(TestBed.inject(Router).url).toBe('/');
   });
 
   it('reports an expired session and allows logout', async () => {
@@ -179,5 +184,24 @@ describe('customer account', () => {
     expect(text()).toContain('Alterar senha');
     expect(text()).toContain('Alterar e-mail');
     expect(harness.routeNativeElement!.querySelector('input')).toBeNull();
+  });
+  it('reuses the panel and sidebar when switching tabs without replacing content with a full skeleton', async () => {
+    signIn();
+    const first = await harness.navigateByUrl('/conta/perfil', CustomerAccountComponent);
+    request('/api/public/customer/profile').flush(profile); harness.detectChanges();
+    const panel = harness.routeNativeElement!.querySelector('.panel')!;
+    const sidebar = harness.routeNativeElement!.querySelector('.sidebar');
+    const second = await harness.navigateByUrl('/conta/enderecos', CustomerAccountComponent);
+    harness.detectChanges();
+    expect(second).toBe(first);
+    expect(harness.routeNativeElement!.querySelector('.panel')).toBe(panel);
+    expect(harness.routeNativeElement!.querySelector('.sidebar')).toBe(sidebar);
+    expect(panel.getAttribute('aria-busy')).toBe('true');
+    expect(panel.querySelector('h2')!.textContent).toBe('Meus endereços');
+    expect(panel.querySelector('.loading')).toBeNull();
+    expect(panel.textContent).not.toContain('Nenhum endereço cadastrado');
+    request('/api/public/customer/addresses').flush([address]); harness.detectChanges();
+    expect(panel.getAttribute('aria-busy')).toBe('false');
+    expect(panel.textContent).toContain('Rua A');
   });
 });

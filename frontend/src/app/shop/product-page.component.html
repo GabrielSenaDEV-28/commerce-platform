@@ -2,6 +2,7 @@
   <header class="shop-header"><a class="brand" routerLink="/">c. <span>commerce</span></a><nav aria-label="Navegação da loja">
     <a [routerLink]="auth.accountKind() === 'merchant' ? '/painel/perfil' : auth.accountKind() === 'customer' ? '/conta/perfil' : '/entrar'">{{ auth.accountKind() === 'merchant' ? 'Administração' : auth.accountKind() === 'customer' ? 'Minha conta' : 'Entrar' }}</a>
     <a routerLink="/carrinho" [attr.aria-label]="'Sacola com ' + cart.count() + ' itens'">Sacola ({{ cart.count() }})</a>
+    <a routerLink="/favoritos">Favoritos</a>
   </nav></header>
   <main class="shop-wrap">
     <nav class="breadcrumbs" aria-label="Navegação estrutural"><a routerLink="/">Início</a><span>/</span><span aria-current="page">{{ product()?.name ?? 'Produto' }}</span></nav>
@@ -11,10 +12,12 @@
       <div class="product-layout">
         <section class="gallery" aria-label="Fotos do produto">
           <app-product-gallery [photos]="item.photos" [name]="item.name" />
-          <section class="description"><span class="overline">CADA DETALHE IMPORTA</span><h2>Sobre o produto</h2><p>{{ item.description }}</p></section>
         </section>
-        <section class="product-summary"><span class="overline">ESCOLHIDO PARA VOCÊ</span><h1>{{ item.name }}</h1><p class="muted">Escolha a combinação que mais combina com você.</p>
-          <app-copy-link [path]="productPath" label="Copiar link do produto" />
+        <section class="product-summary"><span class="overline">ESCOLHIDO PARA VOCÊ</span><h1>{{ item.name }}</h1>
+          <div class="description product-description"><p>{{ item.description }}</p><app-copy-link [path]="productPath" label="Copiar link do produto" [iconOnly]="true" /></div>
+          <button type="button" class="product-favorite" [attr.aria-pressed]="favorites.has(item.id)" (click)="favorites.toggle(item.id)">{{ favorites.has(item.id) ? 'Remover dos favoritos' : 'Salvar nos favoritos' }}</button>
+          @if (favorites.error()) { <p class="field-error">{{ favorites.error() }} <a routerLink="/favoritos">Gerenciar favoritos</a></p> }
+          <p class="muted">Escolha a combinação que mais combina com você.</p>
           <app-purchase-options [product]="item" />
           <details class="payment-info"><summary>Opções de pagamento</summary><p>Pagamentos e parcelamento ainda não estão disponíveis nesta versão. Nenhuma cobrança será feita ao adicionar produtos à sacola.</p></details>
         </section>

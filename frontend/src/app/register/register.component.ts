@@ -3,11 +3,12 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
-import { ActivatedRoute, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { AccountKind, AuthService } from '../auth/auth.service';
 import { watchUnsavedChanges } from '../unsaved-changes';
 import { StoreNavigation } from '../auth/store-navigation.service';
 import { applyServerFieldErrors } from '../ui/validation';
+import { Observable } from 'rxjs';
 
 @Component({
   selector: 'app-register',
@@ -21,6 +22,7 @@ export class RegisterComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly forms = inject(FormBuilder);
   private readonly navigation = inject(StoreNavigation);
+  private readonly router = inject(Router);
   protected readonly auth = inject(AuthService);
   protected readonly kind = signal<AccountKind>(this.route.snapshot.data['kind']);
   protected readonly isMerchant = computed(() => this.kind() === 'merchant');
@@ -77,15 +79,17 @@ export class RegisterComponent {
 
     const { name, storeName, subdomain, email, password } = this.form.getRawValue();
     const kind = this.kind();
-    const url = kind === 'merchant' ? '/api/merchants' : '/api/public/customer-auth/register';
     const body = kind === 'merchant'
       ? { merchantName: name.trim(), storeName: storeName.trim(), subdomain: subdomain.toLowerCase(), email: email.trim(), password }
       : { name: name.trim(), email: email.trim(), password };
     this.error.set('');
     this.loading.set(true);
-    this.http.post<{ subdomain: string } | null>(url, body).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+    const registration: Observable<{ subdomain: string } | null | void> = kind === 'merchant'
+      ? this.http.post<{ subdomain: string } | null>('/api/merchants', body)
+      : this.auth.registerCustomer(name.trim(), email.trim(), password);
+    registration.pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: (response) => {
-        if (kind === 'merchant' && response?.subdomain) {
+        if (kind === 'merchant' && response && response.subdomain) {
           this.storeAddress.set(this.navigation.address(response.subdomain));
         }
         this.form.controls.password.reset();
@@ -94,6 +98,7 @@ export class RegisterComponent {
         this.loading.set(false);
         if (kind === 'merchant' && this.storeAddress()) this.navigation.open(`${this.storeAddress()}/entrar`);
         else if (kind === 'merchant') this.error.set('A loja foi criada, mas seu endereço de acesso não pôde ser determinado neste ambiente. Não repita o cadastro; confira a configuração de domínio com o suporte.');
+        else void this.router.navigateByUrl('/', { replaceUrl: true });
       },
       error: (error: unknown) => {
         if (!applyServerFieldErrors(this.form, error)) {

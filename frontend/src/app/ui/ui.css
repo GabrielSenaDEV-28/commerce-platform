@@ -29,6 +29,14 @@
 .future-features p, .future-features small { color:#52675c; font-size:.73rem; }
 .future-features nav a { gap:10px; }
 main:focus { outline:none; }
+body:has(.mobile-drawer[open]) { overflow:hidden; }
+.mobile-drawer nav { display:flex; flex-direction:column; gap:4px; }
+.mobile-drawer nav a, .mobile-drawer .drawer-content > a { display:flex; align-items:center; justify-content:space-between; min-height:44px; padding:12px; border-radius:6px; font-size:.85rem; }
+.mobile-drawer nav a.active { background:#edf3eb; font-weight:700; }
+.mobile-drawer .drawer-content > a.mobile-menu-home { padding:12px 0; font-size:1rem; color:#294b40; }
+.mobile-drawer .mobile-menu-unavailable { display:flex; justify-content:space-between; color:#6f7a72; padding:12px 0; }
+.mobile-drawer .mobile-menu-note { font-size:.8rem; color:#6f7a72; line-height:1.6; }
+.mobile-drawer p, .mobile-drawer small { font-size:.8rem; color:#627568; line-height:1.6; }
 @media(pointer:coarse) {
   .ui-button, .ui-input, .ui-link.button, .future-features summary { min-height:44px; }
 }
