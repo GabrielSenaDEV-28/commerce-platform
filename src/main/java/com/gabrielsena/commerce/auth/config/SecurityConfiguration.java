@@ -70,6 +70,7 @@ public class SecurityConfiguration {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(authorize -> authorize
                         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                        .requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/merchants").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/store-auth/login").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/store-auth/session/login",

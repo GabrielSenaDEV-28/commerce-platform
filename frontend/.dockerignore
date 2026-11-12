@@ -1,0 +1,9 @@
+node_modules
+.angular
+dist
+.git
+.env
+.env.*
+!.env.example
+*.log
+README.md

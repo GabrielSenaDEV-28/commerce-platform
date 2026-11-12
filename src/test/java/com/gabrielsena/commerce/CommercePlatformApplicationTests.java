@@ -306,6 +306,16 @@ class CommercePlatformApplicationTests {
 	}
 
 	@Test
+	void healthShouldBePublicWithoutExposingOtherActuatorEndpoints() throws Exception {
+		mockMvc.perform(get("/actuator/health"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.status").value("UP"))
+				.andExpect(jsonPath("$.components").doesNotExist());
+		mockMvc.perform(get("/actuator/env")).andExpect(status().isUnauthorized());
+		mockMvc.perform(get("/actuator/health/db")).andExpect(status().isUnauthorized());
+	}
+
+	@Test
 	void publicRateLimitsShouldShareCotasAndProtectEachEntryPoint() throws Exception {
 		CatalogActor actor = catalogActor();
 		String ip = "198.51.100.21";

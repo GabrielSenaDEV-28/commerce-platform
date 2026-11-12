@@ -1,5 +1,10 @@
 # Product Scope
 
+Local container development is documented in [local-development.md](local-development.md).
+Compose starts PostgreSQL, the backend and the Angular development server with
+automatic source updates; it does not change the Modular Monolith architecture
+or represent a production deployment configuration.
+
 ## 1. Problem
 
 Small and medium-sized retailers need a reliable way to sell products online
