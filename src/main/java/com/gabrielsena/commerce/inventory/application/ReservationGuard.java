@@ -22,7 +22,8 @@ public class ReservationGuard {
                 FROM checkout_reservation_items i
                 JOIN checkout_reservations r ON r.store_id = i.store_id AND r.reservation_id = i.reservation_id
                 WHERE i.store_id = ? AND i.product_id = ? AND (?::uuid IS NULL OR i.variant_id = ?)
-                  AND i.reserved AND r.cancelled_at IS NULL AND r.expires_at > statement_timestamp()
+                  AND i.reserved AND r.cancelled_at IS NULL AND r.consumed_at IS NULL
+                  AND r.expires_at > statement_timestamp()
                 """, Long.class, store, product, variant, variant));
     }
 

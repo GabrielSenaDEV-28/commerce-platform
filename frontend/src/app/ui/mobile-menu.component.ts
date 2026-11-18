@@ -7,9 +7,10 @@ import { UI } from './ui';
   selector: 'app-mobile-menu',
   imports: [...UI],
   template: `
-    <button class="menu-trigger icon-action" type="button" [disabled]="busy" [attr.aria-label]="label" (click)="open()">
+    <button class="menu-trigger icon-action" type="button" [class.active]="active" [class.profile]="profile"
+      [disabled]="busy" [attr.aria-label]="label" aria-haspopup="dialog" (click)="open()">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-        @if (profile) { <circle cx="12" cy="8" r="3.3" /><path d="M5 20c0-3.5 2.8-5.8 7-5.8s7 2.3 7 5.8" /> }
+        @if (profile) { <circle cx="12" cy="8" r="3.3" /><path d="M5 20c0-3.5 2.8-5.8 7-5.8s7 2.3 7 5.8Z" /> }
         @else { <path d="M4 6h16M4 12h16M4 18h16" /> }
       </svg>
     </button>
@@ -20,6 +21,10 @@ import { UI } from './ui';
   styles: [`
     :host { display:none; }
     .menu-trigger { display:grid; place-items:center; width:44px; height:44px; padding:0; border:0; background:transparent; color:#294b40; }
+    .menu-trigger.icon-action:not(:disabled):hover { background:transparent; box-shadow:none; }
+    .menu-trigger.profile:is(:focus-visible, .active) svg,
+    :host:has(dialog[open]) .menu-trigger.profile svg { fill:currentColor; }
+    @media(hover:hover) { .menu-trigger.profile:hover svg { fill:currentColor; } }
     dialog.mobile-drawer { position:fixed; inset:0 auto 0 0; margin:0; width:min(320px,88vw); height:100dvh; max-height:100dvh; border-radius:0 16px 16px 0; padding:24px; transform:translateX(-100%); transition:transform .26s ease, display .26s allow-discrete, overlay .26s allow-discrete; }
     dialog.mobile-drawer.right { inset:0 0 0 auto; border-radius:16px 0 0 16px; transform:translateX(100%); }
     dialog.mobile-drawer[open] { transform:translateX(0); }
@@ -38,6 +43,7 @@ export class MobileMenuComponent {
   @Input() busy = false;
   @Input() side: 'left' | 'right' = 'left';
   @Input() profile = false;
+  @Input() active = false;
   @ViewChild('drawer', { read: ElementRef }) private drawer?: ElementRef<HTMLDialogElement>;
   constructor() {
     inject(Router).events.pipe(takeUntilDestroyed(inject(DestroyRef))).subscribe((event) => {
@@ -47,7 +53,7 @@ export class MobileMenuComponent {
   protected open(): void { if (!this.busy) this.drawer?.nativeElement.showModal(); }
   @HostListener('window:resize')
   protected resize(): void { if (window.innerWidth > 720) this.close(); }
-  protected close(): void { if (this.drawer?.nativeElement.open) this.drawer.nativeElement.close(); }
+  close(): void { if (this.drawer?.nativeElement.open) this.drawer.nativeElement.close(); }
   protected cancel(event: Event): void { if (this.busy) event.preventDefault(); }
   protected backdrop(event: MouseEvent): void {
     if (this.busy || event.target !== this.drawer?.nativeElement) return;

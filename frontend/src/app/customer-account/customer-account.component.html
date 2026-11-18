@@ -1,37 +1,27 @@
 <div class="account">
-  <header class="header">
-    <a class="brand" routerLink="/"> <span>c.</span> commerce</a>
-    <a class="back" routerLink="/" aria-label="Voltar para a loja"><span aria-hidden="true">←</span><span class="back-label"> Voltar para a loja</span></a>
-    <app-mobile-menu label="Minha conta" side="right" [profile]="true" [busy]="busy()"><ng-container *ngTemplateOutlet="accountMenu" /></app-mobile-menu>
-  </header>
   <main class="wrap">
     <nav class="crumb" aria-label="Você está aqui"><a routerLink="/">Início</a><span>/</span><span aria-current="page">Minha conta</span></nav>
-    @if (returnToCheckout) { <p><a class="button" routerLink="/checkout">Voltar ao checkout</a></p> }
+    @if (returnToCheckout) { <p><a class="button" routerLink="/checkout" [queryParams]="{ item: checkoutItems, returning: '1' }">Voltar ao checkout</a></p> }
     <div class="heading"><span class="overline">SEU ESPAÇO</span><h1>Minha conta<span>.</span></h1><p>Seus dados e suas compras, tudo em um só lugar.</p></div>
     <div class="layout">
       <aside class="sidebar"><ng-container *ngTemplateOutlet="accountMenu" /></aside>
       <ng-template #accountMenu>
         <p>GERENCIAR CONTA</p>
         <nav aria-label="Menu da conta">
-          @for (item of [{id: 'perfil', label: 'Dados pessoais'}, {id: 'enderecos', label: 'Endereços'}, {id: 'pedidos', label: 'Meus pedidos'}]; track item.id) {
+          @for (item of [{id: 'perfil', label: 'Dados pessoais'}, {id: 'enderecos', label: 'Endereços'}, {id: 'pedidos', label: 'Meus pedidos'}, {id: 'pagamentos', label: 'Meios de pagamento'}]; track item.id) {
             @if (busy()) { <span class="nav-disabled">{{ item.label }}</span> }
-            @else { <a [routerLink]="['/conta', item.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ item.label }} <span>›</span></a> }
+            @else { <a appKeepScroll [routerLink]="['/conta', item.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ item.label }} <span>›</span></a> }
           }
         </nav>
-        <a routerLink="/favoritos">Meus favoritos</a>
         <details class="future-features"><summary>Em breve</summary><p>Recursos ainda indisponíveis.</p><nav aria-label="Recursos futuros da conta">
-          @for (item of [{id: 'pagamentos', label: 'Formas de pagamento'}, {id: 'seguranca', label: 'Segurança e acesso'}]; track item.id) {
-            @if (busy()) { <span class="nav-disabled">{{ item.label }}</span> }
-            @else { <a [routerLink]="['/conta', item.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ item.label }} <small>Em breve</small></a> }
-          }
+          @if (busy()) { <span class="nav-disabled">Segurança e acesso</span> }
+          @else { <a appKeepScroll routerLink="/conta/seguranca" routerLinkActive="active" ariaCurrentWhenActive="page">Segurança e acesso <small>Em breve</small></a> }
         </nav></details>
         <button class="signout" type="button" (click)="logout()" [disabled]="busy()">{{ busy() ? 'Aguarde...' : 'Sair da conta' }}</button>
-        <small>Sua sessão é mantida apenas nesta página e será perdida ao atualizar.</small>
       </ng-template>
       <section class="panel" [attr.aria-busy]="loading()">
-        @if (error()) { <div class="message error" role="alert">{{ error() }} @if (expired()) { <button type="button" (click)="logout()" [disabled]="busy()">Sair da sessão</button> }</div> }
+        @if (error()) { <div class="message error" role="alert">{{ error() }} @if (expired()) { <button type="button" class="signout" (click)="logout()" [disabled]="busy()">Sair da sessão</button> }</div> }
         @if (success()) { <div class="message success" role="status">{{ success() }}</div> }
-        <div class="panel-progress" role="status">{{ loading() ? 'Atualizando seus dados...' : '' }}</div>
         <div [attr.inert]="loading() ? '' : null">
         @if (section() === 'perfil') {
           <div class="panel-title"><span class="overline">SOBRE VOCÊ</span><h2>Dados pessoais</h2><p>Mantenha suas informações atualizadas para seus pedidos.</p></div>
@@ -58,7 +48,7 @@
               <h3>{{ editId() ? 'Editar endereço' : 'Novo endereço' }}</h3>
               <label for="recipient">Destinatário</label><input id="recipient" formControlName="recipient" autocomplete="name" />
               @if (addressForm.controls.recipient.touched && addressForm.controls.recipient.invalid) { <span class="field-error">Informe o destinatário com até 150 caracteres.</span> }
-              <label for="postal">CEP</label><input id="postal" formControlName="postalCode" inputmode="numeric" autocomplete="postal-code" placeholder="Somente 8 números" />
+              <label for="postal">CEP</label><input id="postal" formControlName="postalCode" inputmode="numeric" autocomplete="postal-code" maxlength="9" placeholder="00000-000" />
               @if (addressForm.controls.postalCode.touched && addressForm.controls.postalCode.invalid) { <span class="field-error">Informe um CEP com 8 números.</span> }
               <label for="street">Rua</label><input id="street" formControlName="street" autocomplete="address-line1" />
               @if (addressForm.controls.street.touched && addressForm.controls.street.invalid) { <span class="field-error">Informe a rua com até 150 caracteres.</span> }
@@ -104,13 +94,14 @@
               </div>
             }
             @for (order of page.content; track order.id) {
-              <app-record-card [link]="['/conta/pedidos', order.id]" [label]="'Ver pedido ' + order.id"><strong>Pedido {{ order.id }}</strong><p>{{ order.createdAt | date:'dd/MM/yyyy HH:mm' }} · {{ order.fulfillmentType === 'PICKUP' ? 'Retirada' : 'Entrega' }}</p><p><span class="status">{{ order.status === 'PENDING' ? 'Pendente' : order.status === 'EXPIRED' ? 'Expirado' : order.status === 'CANCELLED' ? 'Cancelado' : order.status }}</span> · {{ order.total | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</p></app-record-card>
+              <app-record-card [link]="['/conta/pedidos', order.id]" [label]="'Ver pedido ' + order.id"><strong>Pedido {{ order.id }}</strong><p>{{ order.createdAt | date:'dd/MM/yyyy HH:mm' }} · {{ order.fulfillmentType === 'PICKUP' ? 'Retirada' : 'Entrega' }}</p><p><span class="status">{{ order.status === 'PENDING' ? 'Pendente' : order.status === 'EXPIRED' ? 'Expirado' : order.status === 'CANCELLED' ? 'Cancelado' : order.status === 'PAID' ? 'Pago' : order.status === 'PAYMENT_REVIEW' ? 'Pagamento em revisão' : order.status }}</span> · {{ order.total | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</p></app-record-card>
             }
             @if (page.totalPages > 1) { <div class="actions pagination"><button class="secondary" type="button" [disabled]="page.page === 0" (click)="loadOrders(page.page - 1)">Anterior</button><span>Página {{ page.page + 1 }} de {{ page.totalPages }}</span><button class="secondary" type="button" [disabled]="page.page + 1 >= page.totalPages" (click)="loadOrders(page.page + 1)">Próxima</button></div> }
           } @else if (error() && !expired()) { <button class="secondary" type="button" (click)="retry()">Tentar novamente</button> }
         } @else if (section() === 'pagamentos') {
-          <div class="panel-title"><span class="overline">EM BREVE</span><h2>Formas de pagamento</h2><p>O cadastro de formas de pagamento ainda não está disponível.</p></div>
-          <div class="empty"><span>◇</span><h3>Estamos preparando esta área</h3><p>Não é possível cadastrar cartões ou realizar pagamentos nesta versão.</p></div>
+          <div class="panel-title"><span class="overline">SUAS COMPRAS</span><h2>Meios de pagamento</h2><p>Consulte como pagar seus pedidos nesta loja.</p></div>
+          <div class="feature"><div><strong>Pix de teste</strong><p>Quando habilitado, o Pix de teste aparece nos detalhes do pedido. Não faça uma transferência real.</p></div></div>
+          <div class="feature"><div><strong>Cartões salvos</strong><p>O cadastro de cartões ainda não está disponível.</p></div><span>EM BREVE</span></div>
         } @else {
           <div class="panel-title"><span class="overline">PROTEJA SUA CONTA</span><h2>Segurança e acesso</h2><p>Gerencie suas credenciais quando estas funcionalidades estiverem disponíveis.</p></div>
           <div class="feature"><div><strong>Alterar e-mail</strong><p>Atualização de e-mail ainda não disponível.</p></div><span>EM BREVE</span></div>

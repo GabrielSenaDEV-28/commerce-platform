@@ -4,7 +4,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { Observable, catchError, tap, throwError } from 'rxjs';
 import { AuthService } from '../auth/auth.service';
 import { CartService } from './cart.service';
-import { Checkout, CheckoutQuote, CreateOrder, Order, PickupOption } from './checkout.models';
+import { Checkout, CheckoutQuote, CreateOrder, Order, PickupOption, PixPayment } from './checkout.models';
 import { CustomerAddress, CustomerProfile } from '../customer-account/customer.models';
 
 @Injectable({ providedIn: 'root' })
@@ -33,10 +33,10 @@ export class CheckoutService {
   profile(): Observable<CustomerProfile> { return this.http.get<CustomerProfile>('/api/public/customer/profile', { headers: this.customerHeaders() }); }
   addresses(): Observable<CustomerAddress[]> { return this.http.get<CustomerAddress[]>('/api/public/customer/addresses', { headers: this.customerHeaders() }); }
   pickup(): Observable<PickupOption> { return this.http.get<PickupOption>('/api/public/pickup'); }
-  start(): Observable<Checkout> {
+  start(variantIds?: string[]): Observable<Checkout> {
     return this.cart.exclusive(() => {
       if (this.pending()) return throwError(() => new Error('Confirme o resultado do pedido antes de iniciar outra reserva.'));
-      return this.http.post<Checkout>('/api/public/checkout', {}, { headers: this.cart.headers() })
+      return this.http.post<Checkout>('/api/public/checkout', variantIds ? { variantIds } : {}, { headers: this.cart.headers() })
         .pipe(tap((value) => { this.reservation.set(value); this.order.set(null); }));
     });
   }
@@ -76,6 +76,11 @@ export class CheckoutService {
   }
   ownedOrder(id: string): Observable<Order> {
     return this.http.get<Order>(`/api/public/customer/orders/${encodeURIComponent(id)}`, { headers: this.customerHeaders() });
+  }
+  pix(id: string, create = false): Observable<PixPayment> {
+    const url = `/api/public/customer/orders/${encodeURIComponent(id)}/pix`;
+    const headers = this.customerHeaders();
+    return create ? this.http.post<PixPayment>(url, {}, { headers }) : this.http.get<PixPayment>(url, { headers });
   }
 }
 

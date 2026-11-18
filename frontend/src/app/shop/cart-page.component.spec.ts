@@ -6,6 +6,7 @@ import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { CartPageComponent } from './cart-page.component';
 import { CartService } from './cart.service';
+import { ToastService } from '../ui/toast.service';
 
 describe('cart review', () => {
   let http: HttpTestingController;
@@ -30,7 +31,7 @@ describe('cart review', () => {
     const fixture = TestBed.createComponent(CartPageComponent);
     http.expectOne('/api/public/cart').flush(cart); fixture.detectChanges(); return fixture;
   }
-  it('reconciles real totals, updates quantity, calculates cart freight and removes items', () => {
+  it('updates totals and the checkout URL when items are selected, without removing them', () => {
     const fixture = setup();
     expect(fixture.nativeElement.querySelector('.total').textContent).toContain('70,00');
     fixture.nativeElement.querySelector('[aria-label="Aumentar quantidade de Blusa"]').click();
@@ -38,17 +39,15 @@ describe('cart review', () => {
     expect(update.request.body).toEqual({ quantity: 3 });
     update.flush({ ...cart, items: [{ ...item, quantity: 3 }] }); fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('.total').textContent).toContain('105,00');
-    expect(fixture.nativeElement.querySelector('[role="status"]').textContent).toContain('Quantidade atualizada');
-    const cep = fixture.nativeElement.querySelector('#destination-cep') as HTMLInputElement;
-    cep.value = '01001000'; cep.dispatchEvent(new Event('input'));
-    fixture.nativeElement.querySelector('form').dispatchEvent(new Event('submit'));
-    const quote = http.expectOne('/api/public/cart/shipping-estimates');
-    expect(quote.request.headers.get('Cart-Token')).toBe('opaque');
-    quote.flush({ quotes: [], unavailable: [] }); fixture.detectChanges();
-    expect(fixture.nativeElement.textContent).toContain('Nenhuma opção de entrega');
+    expect(TestBed.inject(ToastService).toasts()[0].text).toContain('Quantidade atualizada');
+    expect(fixture.nativeElement.querySelector('a[href="/checkout?item=v1"]')).not.toBeNull();
+    fixture.nativeElement.querySelector('input[type="checkbox"]').click(); fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.total').textContent).toContain('0,00');
+    expect(fixture.nativeElement.querySelector('.cart-summary button').disabled).toBe(true);
+    http.expectNone('/api/public/cart/items/p1/v1');
     const remove = [...fixture.nativeElement.querySelectorAll('button')].find((button: HTMLButtonElement) => button.textContent === 'Remover') as HTMLButtonElement;
     remove.click(); http.expectOne('/api/public/cart/items/p1/v1').flush({ ...cart, items: [] }); fixture.detectChanges();
     expect(fixture.nativeElement.textContent).toContain('Sua sacola está esperando');
-    expect(fixture.nativeElement.textContent).toContain('Item removido da sacola');
+    expect(TestBed.inject(ToastService).toasts()[0].text).toContain('Item removido da sacola');
   });
 });

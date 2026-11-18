@@ -191,7 +191,7 @@ public class ShoppingCartService {
     private void requireEditable(UUID store, UUID cart) {
         Boolean active = jdbc.queryForObject("""
                 SELECT EXISTS (SELECT 1 FROM checkout_reservations
-                  WHERE store_id = ? AND cart_id = ? AND cancelled_at IS NULL
+                  WHERE store_id = ? AND cart_id = ? AND cancelled_at IS NULL AND consumed_at IS NULL
                     AND expires_at > statement_timestamp())
                 """, Boolean.class, store, cart);
         if (Boolean.TRUE.equals(active)) {

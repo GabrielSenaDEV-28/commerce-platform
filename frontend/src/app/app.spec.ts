@@ -86,7 +86,6 @@ describe('login routes', () => {
     harness.detectChanges();
     expect(TestBed.inject(Router).url).toBe('/');
     expect(TestBed.inject(AuthService).accountKind()).toBe('merchant');
-    expect(harness.routeNativeElement!.textContent).toContain('Administração');
     http.expectNone('/api/store/me');
   });
 
@@ -179,11 +178,13 @@ describe('login routes', () => {
     fill('#profile-name', 'Não salvo');
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     auth.expire('customer', 'access');
+    expect(TestBed.inject(Router).url).toBe('/conta/perfil');
+    await auth.signInAgain();
     await harness.fixture.whenStable();
     harness.detectChanges();
     expect(confirm).not.toHaveBeenCalled();
-    expect(TestBed.inject(Router).url).toContain('/entrar?expired=1');
-    expect(harness.routeNativeElement!.textContent).toContain('Sua sessão expirou');
+    expect(TestBed.inject(Router).url).toContain('/entrar?returnUrl=');
+    expect(harness.routeNativeElement!.textContent).toContain('Entre na sua conta');
     expect(auth.accountKind()).toBeNull();
     await harness.navigateByUrl('/cadastro', RegisterComponent);
     fill('#name', 'Novo cadastro não salvo');

@@ -1,4 +1,5 @@
-import { DOCUMENT } from '@angular/common';
+import { DOCUMENT, registerLocaleData } from '@angular/common';
+import localePt from '@angular/common/locales/pt';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
@@ -14,6 +15,7 @@ import { StorefrontComponent } from '../storefront/storefront.component';
 describe('checkout access and navigation', () => {
   let http: HttpTestingController;
   beforeEach(() => {
+    registerLocaleData(localePt);
     TestBed.configureTestingModule({ providers: [provideRouter(routes.map((route) => route.component === StorefrontComponent ? { ...route, canMatch: undefined } : route)), provideHttpClient(), provideHttpClientTesting()] });
     TestBed.overrideComponent(LoginComponent, { add: { providers: [{ provide: DOCUMENT, useValue: {
       location: { hostname: 'loja.localhost' }, defaultView: window,
@@ -47,10 +49,9 @@ describe('checkout access and navigation', () => {
     expect(safeReturnUrl('//example.com/checkout', 'customer')).toBeNull();
     expect(safeReturnUrl('/checkout/another', 'customer')).toBeNull();
   });
-  it('opens the storefront after login even when the previous destination was checkout', async () => {
+  it('returns to checkout with the selected items after login', async () => {
     const harness = await RouterTestingHarness.create();
-    await harness.navigateByUrl('/entrar?returnUrl=%2Fcheckout', LoginComponent);
-    expect(harness.routeNativeElement!.querySelector('a[href="/cadastro?returnUrl=%2Fcheckout"]')).not.toBeNull();
+    await harness.navigateByUrl('/entrar?returnUrl=%2Fcheckout%3Fitem%3Dv1', LoginComponent);
     for (const [id, value] of [['email', 'customer@example.com'], ['password', 'password']]) {
       const input = harness.routeNativeElement!.querySelector<HTMLInputElement>(`#${id}`)!;
       input.value = value; input.dispatchEvent(new Event('input'));
@@ -58,10 +59,11 @@ describe('checkout access and navigation', () => {
     harness.routeNativeElement!.querySelector('form')!.dispatchEvent(new Event('submit'));
     http.expectOne('/api/public/store-auth/session/login').flush({ accountKind: 'customer', identity: 'customer-id', accessToken: 'access', refreshToken: 'r', expiresIn: 900 });
     await harness.fixture.whenStable();
-    expect(TestBed.inject(Router).url).toBe('/');
-    http.expectOne((req) => req.url === '/api/public/catalog/products').flush({ content: [], page: 0, totalPages: 0, totalElements: 0 });
+    expect(TestBed.inject(Router).url).toBe('/checkout?item=v1');
+    http.expectOne('/api/public/customer/profile').flush({ name: 'Cliente', phone: '11999999999' });
+    http.expectOne('/api/public/customer/addresses').flush([]);
+    http.expectOne('/api/public/pickup').flush({ available: false });
     http.expectOne('/api/public/cart/customer').flush({ token: 'customer-cart', cart: { items: [] } });
-    http.expectNone('/api/public/customer/profile');
   });
   it('links back to checkout from the existing address manager without duplicating its form', async () => {
     TestBed.inject(AuthService).loginStore('customer@example.com', 'password').subscribe();
@@ -69,6 +71,34 @@ describe('checkout access and navigation', () => {
     const harness = await RouterTestingHarness.create();
     await harness.navigateByUrl('/conta/enderecos?returnTo=checkout', CustomerAccountComponent);
     http.expectOne('/api/public/customer/addresses').flush([]); harness.detectChanges();
-    expect(harness.routeNativeElement!.querySelector('a[href="/checkout"]')!.textContent).toContain('Voltar ao checkout');
+    expect(harness.routeNativeElement!.querySelector('a[href="/checkout?returning=1"]')!.textContent).toContain('Voltar ao checkout');
+  });
+  it('saves a delivery address from checkout and returns to the same selection', async () => {
+    TestBed.inject(AuthService).loginStore('customer@example.com', 'password').subscribe();
+    http.expectOne('/api/public/store-auth/session/login').flush({ accountKind: 'customer', identity: 'customer-id', accessToken: 'access', expiresIn: 900 });
+    const harness = await RouterTestingHarness.create();
+    await harness.navigateByUrl('/conta/enderecos?returnTo=checkout&novo=1&item=v1', CustomerAccountComponent);
+    http.expectOne('/api/public/customer/addresses').flush([]);
+    harness.detectChanges();
+    for (const [id, value] of Object.entries({ recipient: 'Cliente', postal: '01001-000', street: 'Praça da Sé', number: '1', district: 'Sé', city: 'São Paulo', state: 'SP' })) {
+      const field = harness.routeNativeElement!.querySelector<HTMLInputElement | HTMLSelectElement>(`#${id}`)!;
+      field.value = value;
+      field.dispatchEvent(new Event(field instanceof HTMLSelectElement ? 'change' : 'input'));
+    }
+    harness.routeNativeElement!.querySelector('form')!.dispatchEvent(new Event('submit'));
+    const request = http.expectOne('/api/public/customer/addresses');
+    expect(request.request.body.postalCode).toBe('01001000');
+    const address = { ...request.request.body, id: 'a1' };
+    request.flush(address);
+    await harness.fixture.whenStable();
+    expect(TestBed.inject(Router).url).toBe('/checkout?item=v1&address=a1&returning=1');
+    http.expectOne('/api/public/customer/profile').flush({ name: 'Cliente', phone: '11999999999' });
+    http.expectOne('/api/public/customer/addresses').flush([address]);
+    http.expectOne('/api/public/pickup').flush({ available: false });
+    http.expectOne('/api/public/cart/customer').flush({ token: 'customer-cart', cart: { items: [{ productId: 'p1', variantId: 'v1', name: 'Camisa', quantity: 1, price: 20, available: true }] } });
+    await harness.fixture.whenStable();
+    http.expectOne(req => req.method === 'GET' && req.url === '/api/public/checkout').flush({ status: 'ACTIVE', id: 'r1', expiresAt: '2099-01-01T00:00:00Z', items: [{ productId: 'p1', variantId: 'v1', quantity: 1, price: 20, reserved: true }] });
+    harness.detectChanges();
+    expect(harness.routeNativeElement!.querySelector<HTMLSelectElement>('#checkout-address')?.value).toBe('a1');
   });
 });

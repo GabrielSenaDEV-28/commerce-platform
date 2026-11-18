@@ -1,8 +1,7 @@
-<header class="shop-header"><a class="brand" routerLink="/">c. <span>commerce</span></a><a routerLink="/carrinho">Minha sacola</a></header>
 <main class="shop-wrap">
   <nav class="breadcrumbs" aria-label="Navegação estrutural"><a routerLink="/">Início</a><span>/</span><a routerLink="/carrinho">Sacola</a><span>/</span><span aria-current="page">Checkout</span></nav>
   <span class="overline">REVISE CADA DETALHE</span><h1>Seu próximo pedido.</h1>
-  <p class="muted">Esta etapa cria um pedido pendente. Pagamento online ainda não está disponível e nenhuma cobrança será feita.</p>
+  <p class="muted">Esta etapa cria um pedido pendente, sem gerar cobrança. Quando habilitado, o Pix de teste aparece nos detalhes do pedido.</p>
   <p class="muted">Sua sacola pode ser recuperada ao entrar novamente. Não atualize durante a criação do pedido: as escolhas de entrega e tentativas incertas ficam apenas na memória desta aba. Se atualizar, consulte seus pedidos antes de tentar outra vez.</p>
   @if (error()) { <p class="field-error">{{ error() }}</p>
     @if (profile() && !checkout.pending()) { <button type="button" [disabled]="isSaving()" (click)="load()">Atualizar dados do checkout</button> }
@@ -26,13 +25,21 @@
   } @else {
     <section class="checkout-panel"><h2>1. Seus dados</h2><p>{{ profile()!.name }} · {{ profile()!.email }}</p><p>{{ profile()!.phone || 'Telefone não informado' }}</p>
       @if (!profile()!.phone) { <p class="field-error">Cadastre um telefone com DDD antes de criar o pedido.</p> }
-      <a routerLink="/conta/perfil" [queryParams]="{ returnTo: 'checkout' }">Editar dados pessoais</a>
+      <a routerLink="/conta/perfil" [queryParams]="{ returnTo: 'checkout', item: variantIds() }">Editar dados pessoais</a>
+      @if (!addresses().length) {
+        <p>Para receber em casa, cadastre um endereço antes de reservar. Para retirada, não é necessário.</p>
+        <a class="button secondary" routerLink="/conta/enderecos" [queryParams]="{ returnTo: 'checkout', item: variantIds(), novo: '1' }">Cadastrar endereço de entrega</a>
+      }
     </section>
     @if (!active()) {
       <section class="checkout-panel"><h2>2. Reserva de estoque</h2>
         @if (checkout.reservation()) { <p role="status">A reserva não está ativa: expirou, foi cancelada ou nenhum item pôde ser reservado. Inicie uma nova conferência para consultar preço e estoque atuais.</p> }
         <p>Ao continuar, reservamos os itens disponíveis pelo prazo informado pelo servidor. Preços e quantidades podem mudar desde a sacola.</p>
-        <button type="button" class="primary" [disabled]="isSaving() || !profile()!.phone" (click)="start()">Conferir e reservar itens</button>
+        @if (selectedCartItems().length) {
+          <ul>@for (item of selectedCartItems(); track item.variantId) { <li>{{ item.quantity }} × {{ item.name }} {{ item.color }} {{ item.size }}</li> }</ul>
+        }
+        @if (variantIds().length && selectedCartItems().length !== variantIds().length) { <p class="field-error">A seleção mudou. <a routerLink="/carrinho">Volte à sacola</a> para revisar os itens.</p> }
+        <button type="button" class="primary" [disabled]="isSaving() || !profile()!.phone || (variantIds().length > 0 && selectedCartItems().length !== variantIds().length)" (click)="start()">Conferir e reservar itens</button>
       </section>
     }
     @if (checkout.reservation(); as reservation) {
@@ -40,6 +47,10 @@
         <section class="checkout-panel"><h2>2. Itens da reserva</h2>
           <button type="button" [disabled]="isSaving()" (click)="refreshReservation()">Conferir estado da reserva</button>
           @if (active()) { <p role="status">Reserva válida até {{ reservation.expiresAt | date:'dd/MM/yyyy HH:mm:ss' }}. A criação do pedido não estende esse prazo.</p> }
+          @if (reservationConflict()) {
+            <p role="alert">Já existe uma reserva com outros itens. Continue com a reserva anterior ou cancele-a para revisar a seleção.</p>
+            <button type="button" [disabled]="isSaving()" (click)="useExistingSelection()">Continuar com os itens já reservados</button>
+          }
           @for (item of reservation.items; track item.variantId) {
             <app-record-card [staticCard]="true" [label]="name(item)"><h3>{{ name(item) }}</h3>
               <p>{{ item.quantity }} unidade(s) · {{ item.price | currency:'BRL':'symbol':'1.2-2':'pt-BR' }} / unidade</p>
@@ -62,13 +73,13 @@
               @if (!pickup()?.available) { <p class="muted">Esta loja não oferece retirada no momento.</p> }
               @if (fulfillment() === 'DELIVERY') {
                 <label for="checkout-address">Endereço de entrega</label>
-                <select id="checkout-address" [value]="addressId()" (change)="chooseAddress($event)" [attr.aria-invalid]="submitted() && !selectedAddress()" aria-describedby="address-error">
-                  <option value="">Escolha um endereço</option>
-                  @for (address of addresses(); track address.id) { <option [value]="address.id">{{ address.recipient }} · {{ address.street }}, {{ address.number }} · {{ address.city }}/{{ address.state }} · {{ address.postalCode }}</option> }
+                <select id="checkout-address" (change)="chooseAddress($event)" [attr.aria-invalid]="submitted() && !selectedAddress()" [attr.aria-describedby]="submitted() && !selectedAddress() ? 'address-error' : null">
+                  <option value="" [selected]="!addressId()">Escolha um endereço</option>
+                  @for (address of addresses(); track address.id) { <option [value]="address.id" [selected]="address.id === addressId()">{{ address.recipient }} · {{ address.street }}, {{ address.number }} · {{ address.city }}/{{ address.state }} · {{ address.postalCode }}</option> }
                 </select>
                 @if (submitted() && !selectedAddress()) { <p class="field-error" id="address-error">Selecione um endereço de entrega.</p> }
                 @if (!addresses().length) { <p>Você ainda não cadastrou um endereço.</p> }
-                <a routerLink="/conta/enderecos" [queryParams]="{ returnTo: 'checkout' }">Cadastrar ou gerenciar endereços</a>
+                <a routerLink="/conta/enderecos" [queryParams]="{ returnTo: 'checkout', item: variantIds(), novo: '1' }">Cadastrar outro endereço</a>
                 @if (selectedAddress(); as address) { <p>{{ address.recipient }} · {{ address.street }}, {{ address.number }} {{ address.complement }} · {{ address.district }} · {{ address.city }}/{{ address.state }} · CEP {{ address.postalCode }}</p> }
                 <div class="actions"><button type="button" [disabled]="!selectedAddress()" (click)="calculate()">Consultar opções de entrega</button></div>
                 @if (quote(); as result) {
@@ -95,7 +106,7 @@
         @else { <p>Retirada gratuita</p> }
         <p class="total">{{ total() | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</p>
         <p>{{ fulfillment() === 'DELIVERY' && !selectedService() ? 'Subtotal sem frete; selecione a entrega para ver o total.' : 'Total para os itens e recebimento selecionados.' }}</p>
-        <button type="button" class="primary" [disabled]="isSaving() || !active()" (click)="submit()">Criar pedido pendente</button>
+        <button type="button" class="primary" [disabled]="isSaving() || !active() || reservationConflict()" (click)="submit()">Criar pedido pendente</button>
         <p>Não há pagamento nesta etapa. O pedido permanece pendente e pode expirar no prazo da reserva.</p>
         @if (active()) {
           @if (!cancelRequested()) { <button type="button" [disabled]="isSaving()" (click)="cancelRequested.set(true)">Cancelar reserva e revisar sacola</button> }

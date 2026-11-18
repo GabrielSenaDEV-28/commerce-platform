@@ -20,7 +20,6 @@
 .signout { margin-top: 16px; width: 100%; text-align: left; }
 .sidebar small { display: block; margin: 12px; color: #87948a; font-size: .71rem; line-height: 1.5; }
 .panel { position:relative; padding: 38px; min-height: 560px; }
-.panel-progress { position:absolute; top:12px; right:24px; color:#627568; font-size:.73rem; }
 .panel-title { border-bottom: 1px solid #ebefea; padding-bottom: 26px; margin-bottom: 26px; }
 .panel-title h2 { font: 400 2rem Georgia, serif; margin: 10px 0; }
 form { max-width: 580px; display: flex; flex-direction: column; }

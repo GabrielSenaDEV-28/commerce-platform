@@ -10,7 +10,7 @@ export interface ReservationItem {
   reserved: boolean; availableQuantity: number;
 }
 export interface Checkout {
-  id: string | null; status: 'ACTIVE' | 'UNAVAILABLE' | 'EXPIRED' | 'CANCELLED';
+  id: string | null; status: 'ACTIVE' | 'UNAVAILABLE' | 'EXPIRED' | 'CANCELLED' | 'COMPLETED';
   expiresAt: string | null; items: ReservationItem[];
 }
 export interface CheckoutQuote extends QuoteResult { quoteId: string; reservationId: string; expiresAt: string }
@@ -25,4 +25,11 @@ export interface Order {
   items: { productId: string; variantId: string; name: string; color: string | null; size: string | null; unitPrice: number; quantity: number }[];
   delivery: { phone: string; address: CustomerAddress; shipping: { serviceId: number; name: string; price: number; deliveryDays: number } | null } | null;
   pickup: { phone: string; address: PickupAddress; instructions: string | null; cost: number } | null;
+}
+export interface PixPayment {
+  enabled: boolean;
+  status: 'CREATING' | 'PENDING' | 'PAID' | 'EXPIRED' | 'REVIEW' | null;
+  copyCode: string | null;
+  qrImage: string | null;
+  expiresAt: string;
 }

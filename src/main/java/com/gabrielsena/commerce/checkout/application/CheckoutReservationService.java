@@ -11,6 +11,7 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
+import java.util.HashSet;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -31,10 +32,26 @@ public class CheckoutReservationService {
 
     @Transactional
     public Checkout start(UUID store, String token) {
+        return start(store, token, null);
+    }
+
+    @Transactional
+    public Checkout start(UUID store, String token, List<UUID> selected) {
+        var selection = selected == null ? null : new HashSet<>(selected);
+        if (selection != null && (selection.isEmpty() || selected.size() > 100
+                || selection.size() != selected.size() || selection.contains(null))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid checkout item selection.");
+        }
         UUID cart = carts.cartId(store, token, true);
         Header active = active(store, cart);
         if (active != null) {
-            return checkout(store, active);
+            Checkout existing = checkout(store, active);
+            if (selection != null && !selection.equals(new HashSet<>(existing.items().stream().map(Item::variantId).toList()))) {
+                var problem = new ResponseStatusException(HttpStatus.CONFLICT, "An active reservation has a different item selection.");
+                problem.getBody().setProperty("code", "CHECKOUT_SELECTION_CONFLICT");
+                throw problem;
+            }
+            return existing;
         }
 
         jdbc.query("""
@@ -47,6 +64,12 @@ public class CheckoutReservationService {
                 SELECT variant_id FROM shopping_cart_items
                 WHERE store_id = ? AND cart_id = ? ORDER BY variant_id
                 """, (rs, row) -> rs.getObject(1, UUID.class), store, cart);
+        if (selection != null) {
+            if (!variants.containsAll(selection)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Some selected items are no longer in the cart.");
+            }
+            variants = variants.stream().filter(selection::contains).toList();
+        }
         if (variants.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "The cart is empty.");
         }
@@ -74,13 +97,14 @@ public class CheckoutReservationService {
                 """, (rs, row) -> new Item(rs.getObject("product_id", UUID.class),
                 rs.getObject("variant_id", UUID.class), rs.getInt("quantity"), rs.getBigDecimal("price"),
                 rs.getBoolean("reserved"), rs.getInt("available_quantity")), store, cart);
+        if (selection != null) items = items.stream().filter(item -> selection.contains(item.variantId())).toList();
         if (items.stream().noneMatch(Item::reserved)) {
             return new Checkout(null, "UNAVAILABLE", null, items);
         }
         UUID id = UUID.randomUUID();
         Header header = Objects.requireNonNull(jdbc.queryForObject("""
                 INSERT INTO checkout_reservations (reservation_id, store_id, cart_id, created_at, expires_at)
-                SELECT ?, ?, ?, now_at, now_at + INTERVAL '20 minutes' FROM (SELECT clock_timestamp() AS now_at) t
+                SELECT ?, ?, ?, now_at, now_at + INTERVAL '30 minutes' FROM (SELECT clock_timestamp() AS now_at) t
                 RETURNING reservation_id, expires_at
                 """, (rs, row) -> new Header(rs.getObject(1, UUID.class), rs.getTimestamp(2).toInstant(), "ACTIVE"),
                 id, store, cart));
@@ -107,7 +131,8 @@ public class CheckoutReservationService {
         UUID cart = carts.cartId(store, token, false);
         List<Header> headers = jdbc.query("""
                 SELECT reservation_id, expires_at,
-                  CASE WHEN cancelled_at IS NOT NULL THEN 'CANCELLED'
+                  CASE WHEN consumed_at IS NOT NULL THEN 'COMPLETED'
+                       WHEN cancelled_at IS NOT NULL THEN 'CANCELLED'
                        WHEN expires_at <= statement_timestamp() THEN 'EXPIRED' ELSE 'ACTIVE' END AS status
                 FROM checkout_reservations WHERE store_id = ? AND cart_id = ?
                 ORDER BY created_at DESC, reservation_id DESC LIMIT 1
@@ -129,10 +154,16 @@ public class CheckoutReservationService {
         int updated = jdbc.update("""
                 UPDATE checkout_reservations SET cancelled_at = clock_timestamp()
                 WHERE store_id = ? AND reservation_id = ? AND cancelled_at IS NULL
-                  AND expires_at > clock_timestamp()
+                  AND consumed_at IS NULL AND expires_at > clock_timestamp()
+                  AND NOT EXISTS (
+                    SELECT 1 FROM commerce_orders o JOIN sandbox_pix_payments p USING (store_id, order_id)
+                    WHERE o.store_id = checkout_reservations.store_id
+                      AND o.reservation_id = checkout_reservations.reservation_id
+                      AND p.status IN ('CREATING', 'PENDING')
+                  )
                 """, store, active.id());
         if (updated == 0) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Checkout has expired.");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Checkout expired or has a Pix charge in progress.");
         }
         return checkout(store, new Header(active.id(), active.expiresAt(), "CANCELLED"));
     }
@@ -140,7 +171,8 @@ public class CheckoutReservationService {
     private Header active(UUID store, UUID cart) {
         return jdbc.query("""
                 SELECT reservation_id, expires_at FROM checkout_reservations
-                WHERE store_id = ? AND cart_id = ? AND cancelled_at IS NULL AND expires_at > statement_timestamp()
+                WHERE store_id = ? AND cart_id = ? AND cancelled_at IS NULL AND consumed_at IS NULL
+                    AND expires_at > statement_timestamp()
                 ORDER BY created_at DESC LIMIT 1
                 """, (rs, row) -> new Header(rs.getObject(1, UUID.class), rs.getTimestamp(2).toInstant(), "ACTIVE"),
                 store, cart).stream().findFirst().orElse(null);

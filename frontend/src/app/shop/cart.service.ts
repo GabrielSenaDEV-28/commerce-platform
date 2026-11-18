@@ -53,7 +53,8 @@ export class CartService {
   }
   exclusive<T>(request: () => Observable<T>): Observable<T> {
     return defer(() => {
-      if (this.auth.restorationError()) return throwError(() => new Error(this.auth.restorationError()));
+      const sessionError = this.auth.restorationError();
+      if (sessionError || this.auth.expiredSession()) return throwError(() => new Error(sessionError || 'Entre novamente para acessar a sacola.'));
       if (this.busy()) return throwError(() => new Error('Aguarde a operação atual do carrinho.'));
       this.busy.set(true);
       return defer(request).pipe(finalize(() => this.busy.set(false)));
@@ -83,13 +84,16 @@ export class CartService {
     return this.token ? this.read() : of(null);
   }
   load(): Observable<Cart | null> {
+    const sessionError = this.auth.restorationError();
+    if (sessionError || this.auth.expiredSession()) return throwError(() => new Error(sessionError || 'Entre novamente para acessar a sacola.'));
     if (this.loadingRequest) return this.loadingRequest;
     this.loadingRequest = this.exclusive(() => {
       this.recoveryError.set('');
       this.canDiscardAnonymous.set(false);
       return this.recover();
     }).pipe(catchError((error: unknown) => {
-      this.recoveryError.set(cartError(error));
+      this.recoveryError.set(error instanceof HttpErrorResponse && [401, 403, 404, 409, 429].includes(error.status)
+        ? cartError(error) : 'Não foi possível carregar sua sacola. Tente novamente.');
       this.canDiscardAnonymous.set(!this.accountToken && !!this.token && error instanceof HttpErrorResponse && error.status === 404);
       return throwError(() => error);
     }), finalize(() => this.loadingRequest = undefined), shareReplay({ bufferSize: 1, refCount: true }));

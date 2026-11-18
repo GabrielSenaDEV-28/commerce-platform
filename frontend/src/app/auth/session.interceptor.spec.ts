@@ -22,7 +22,8 @@ describe('session interceptor', () => {
     client.get('/api/products', { headers: new HttpHeaders({ Authorization: 'Bearer current' }) }).subscribe({ error: () => undefined });
     http.expectOne('/api/products').flush({}, { status: 401, statusText: 'Unauthorized' });
     expect(auth.accountKind()).toBeNull();
-    expect(TestBed.inject(Router).navigate).toHaveBeenCalledTimes(1);
+    expect(auth.expiredSession()).not.toBeNull();
+    expect(TestBed.inject(Router).navigate).not.toHaveBeenCalled();
   });
   it.each([undefined, 'Bearer old'])('does not expire on public requests or an old token (%s)', (authorization) => {
     client.get('/api/products', { headers: authorization ? { Authorization: authorization } : {} }).subscribe({ error: () => undefined });

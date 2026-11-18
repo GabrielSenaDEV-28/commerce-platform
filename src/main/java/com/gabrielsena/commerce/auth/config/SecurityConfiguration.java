@@ -71,6 +71,9 @@ public class SecurityConfiguration {
                 .authorizeHttpRequests(authorize -> authorize
                         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/public/payments/mercado-pago/webhook").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/public/customer/orders/{orderId}/pix").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/public/customer/orders/{orderId}/pix").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/merchants").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/store-auth/login").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/store-auth/session/login",

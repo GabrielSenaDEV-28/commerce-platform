@@ -62,7 +62,10 @@ public class OrderService {
                             UUID quoteId, Integer serviceId) { }
 
     private static final String STATUS = """
-            CASE WHEN r.cancelled_at IS NOT NULL THEN 'CANCELLED'
+            CASE WHEN r.consumed_at IS NOT NULL THEN 'PAID'
+                 WHEN EXISTS (SELECT 1 FROM sandbox_pix_payments p WHERE p.order_id = o.order_id
+                     AND p.store_id = o.store_id AND p.status = 'REVIEW') THEN 'PAYMENT_REVIEW'
+                 WHEN r.cancelled_at IS NOT NULL THEN 'CANCELLED'
                  WHEN r.expires_at <= statement_timestamp() THEN 'EXPIRED'
                  ELSE 'PENDING' END
             """;
@@ -129,7 +132,7 @@ public class OrderService {
                 SELECT i.reserved FROM checkout_reservation_items i
                 JOIN checkout_reservations r ON r.store_id = i.store_id AND r.reservation_id = i.reservation_id
                 WHERE r.store_id = ? AND r.cart_id = ? AND r.reservation_id = ?
-                  AND r.cancelled_at IS NULL AND r.expires_at > clock_timestamp()
+                  AND r.cancelled_at IS NULL AND r.consumed_at IS NULL AND r.expires_at > clock_timestamp()
                 """, (rs, row) -> rs.getBoolean(1), store, cart, reservationId);
         if (items.isEmpty() || items.stream().noneMatch(Boolean::booleanValue)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Checkout reservation is not active.");
@@ -165,7 +168,7 @@ public class OrderService {
                     accepted_partial, fulfillment_type, created_at)
                 SELECT ?, store_id, reservation_id, ?, ?, ?, ?, ?, clock_timestamp()
                 FROM checkout_reservations WHERE store_id = ? AND cart_id = ? AND reservation_id = ?
-                  AND cancelled_at IS NULL AND expires_at > clock_timestamp()
+                  AND cancelled_at IS NULL AND consumed_at IS NULL AND expires_at > clock_timestamp()
                 """, id, customer.id(), profile.name(), profile.email(), acceptPartial, fulfillmentType.name(), store, cart, reservationId);
         if (inserted == 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Checkout reservation is not active.");

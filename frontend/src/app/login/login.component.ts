@@ -3,7 +3,7 @@ import { Component, DestroyRef, inject, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { AuthService, loginError } from '../auth/auth.service';
+import { AuthService, loginError, safeReturnUrl } from '../auth/auth.service';
 import { UI } from '../ui/ui';
 
 @Component({
@@ -13,8 +13,8 @@ import { UI } from '../ui/ui';
   styleUrl: './login.component.css',
 })
 export class LoginComponent {
-  private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
   private readonly document = inject(DOCUMENT);
   private readonly destroy = inject(DestroyRef);
   private readonly forms = inject(FormBuilder);
@@ -22,7 +22,6 @@ export class LoginComponent {
   protected readonly platformHost = ['localhost', '127.0.0.1'].includes(this.document.location.hostname);
   protected readonly loading = signal(false);
   protected readonly error = signal('');
-  protected readonly expired = signal(false);
   protected readonly form = this.forms.nonNullable.group({
     email: ['', [Validators.required, Validators.email, Validators.maxLength(320)]],
     password: ['', [Validators.required, Validators.maxLength(128)]],
@@ -30,9 +29,6 @@ export class LoginComponent {
   protected readonly storeForm = this.forms.nonNullable.group({
     subdomain: ['', [Validators.required, Validators.pattern(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/)]],
   });
-  constructor() {
-    this.route.queryParamMap.pipe(takeUntilDestroyed(this.destroy)).subscribe((params) => this.expired.set(params.get('expired') === '1'));
-  }
   protected openStore(): void {
     if (this.storeForm.invalid) { this.storeForm.markAllAsTouched(); return; }
     const location = this.document.location;
@@ -44,9 +40,11 @@ export class LoginComponent {
     this.loading.set(true); this.error.set('');
     const { email, password } = this.form.getRawValue();
     this.auth.loginStore(email.trim(), password).pipe(takeUntilDestroyed(this.destroy)).subscribe({
-      next: () => {
+      next: (kind) => {
         this.form.controls.password.reset(); this.loading.set(false);
-        void this.router.navigateByUrl('/', { replaceUrl: true });
+        const destination = safeReturnUrl(this.route.snapshot.queryParamMap.get('returnUrl'), kind);
+        const checkout = kind === 'customer' && destination?.split(/[?#]/)[0] === '/checkout';
+        void this.router.navigateByUrl(checkout ? destination : '/', { replaceUrl: true });
       },
       error: (error: unknown) => { this.loading.set(false); this.error.set(loginError(error, 'customer')); },
     });

@@ -3,11 +3,13 @@ import localePt from '@angular/common/locales/pt';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { Router, provideRouter } from '@angular/router';
 import { StorefrontComponent } from './storefront.component';
 import { AuthService } from '../auth/auth.service';
 import { CartService } from '../shop/cart.service';
 import { Cart } from '../shop/shop.models';
+import { ToastService } from '../ui/toast.service';
+import { ShopHeaderComponent } from '../ui/shop-header.component';
 import { vi } from 'vitest';
 import { throwError } from 'rxjs';
 
@@ -53,44 +55,71 @@ describe('StorefrontComponent', () => {
   it('shows only the administration account action for the store owner', () => {
     TestBed.inject(AuthService).loginStore('owner@example.com', 'password').subscribe();
     http.expectOne('/api/public/store-auth/session/login').flush({ accessToken: 'access', refreshToken: 'refresh', tokenType: 'Bearer', expiresIn: 900, accountKind: 'merchant', identity: 'merchant-id' });
-    const fixture = setup();
-    request().flush({ content: [], page: 0, totalPages: 0, totalElements: 0 }); fixture.detectChanges();
-    const actions = fixture.nativeElement.querySelectorAll('.header-actions > a.desktop-account');
-    expect(actions.length).toBe(1);
-    expect(actions[0].getAttribute('href')).toBe('/painel/perfil');
-    expect(actions[0].textContent).toContain('Administração');
+    const fixture = TestBed.createComponent(ShopHeaderComponent); fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('[aria-label="Administração"]')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('a.desktop-account')?.getAttribute('href')).toBe('/painel/perfil');
     expect(fixture.nativeElement.querySelector('.header-actions').textContent).not.toContain('Entrar');
   });
   it('opens customer options in the right-hand profile drawer without navigating first', () => {
     TestBed.inject(AuthService).loginStore('customer@example.com', 'password').subscribe();
     http.expectOne('/api/public/store-auth/session/login').flush({ accessToken: 'access', refreshToken: 'refresh', tokenType: 'Bearer', expiresIn: 900, accountKind: 'customer', identity: 'customer-id' });
-    const fixture = setup();
-    request().flush({ content: [], page: 0, totalPages: 0, totalElements: 0 }); fixture.detectChanges();
+    const fixture = TestBed.createComponent(ShopHeaderComponent); fixture.detectChanges();
     const root: HTMLElement = fixture.nativeElement;
     const drawer = root.querySelector<HTMLDialogElement>('.header-actions .mobile-drawer')!;
     const show = vi.fn(); Object.defineProperty(drawer, 'showModal', { value: show });
     root.querySelector<HTMLButtonElement>('.header-actions .menu-trigger')!.click();
     expect(show).toHaveBeenCalledOnce(); expect(drawer.classList.contains('right')).toBe(true);
     expect([...drawer.querySelectorAll('a')].map((link) => link.getAttribute('href'))).toEqual([
-      '/favoritos', '/conta/perfil', '/conta/enderecos', '/conta/pedidos', '/conta/pagamentos', '/conta/seguranca',
+      '/conta/perfil', '/conta/enderecos', '/conta/pedidos', '/conta/pagamentos', '/conta/seguranca',
     ]);
     expect(drawer.textContent).toContain('Sair da conta');
     expect(root.querySelector('.header-inner > app-mobile-menu a')?.textContent).toBe('Início');
+    expect(root.querySelector('a[aria-label="Favoritos"]')?.textContent?.trim()).toBe('');
+    expect(root.querySelector('a[href="/carrinho"]')).not.toBeNull();
     http.expectNone('/api/public/customer/profile');
   });
-  it('reports logout failures inside the profile drawer and preserves the session', () => {
+  it('links directly to the desktop account page and keeps the icon active across account routes', async () => {
+    const router = TestBed.inject(Router);
+    router.resetConfig([
+      { path: 'conta/:section', component: ShopHeaderComponent },
+      { path: 'favoritos', component: ShopHeaderComponent },
+    ]);
+    TestBed.inject(AuthService).loginStore('customer@example.com', 'password').subscribe();
+    http.expectOne('/api/public/store-auth/session/login').flush({ accessToken: 'access', expiresIn: 900, accountKind: 'customer', identity: 'customer-id' });
+    const fixture = TestBed.createComponent(ShopHeaderComponent); fixture.detectChanges();
+    const account: HTMLAnchorElement = fixture.nativeElement.querySelector('a.desktop-account');
+    expect(account.getAttribute('href')).toBe('/conta/perfil');
+    expect(account.classList.contains('active')).toBe(false);
+    account.click();
+    await fixture.whenStable(); fixture.detectChanges();
+    expect(router.url).toBe('/conta/perfil');
+    expect(account.getAttribute('aria-current')).toBe('page');
+    await router.navigateByUrl('/conta/enderecos');
+    fixture.detectChanges();
+    expect(account.classList.contains('active')).toBe(true);
+    await router.navigateByUrl('/favoritos');
+    fixture.detectChanges();
+    expect(account.classList.contains('active')).toBe(false);
+    expect(fixture.nativeElement.querySelector('a[href="/favoritos"]').getAttribute('aria-current')).toBe('page');
+  });
+  it('reports unconfirmed logout as a toast and lets the customer retry', () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
     const auth = TestBed.inject(AuthService);
     auth.loginStore('customer@example.com', 'password').subscribe();
     http.expectOne('/api/public/store-auth/session/login').flush({ accessToken: 'access', refreshToken: 'refresh', tokenType: 'Bearer', expiresIn: 900, accountKind: 'customer', identity: 'customer-id' });
-    const fixture = setup();
-    request().flush({ content: [], page: 0, totalPages: 0, totalElements: 0 }); fixture.detectChanges();
+    const fixture = TestBed.createComponent(ShopHeaderComponent); fixture.detectChanges();
     const drawer: HTMLElement = fixture.nativeElement.querySelector('.header-actions dialog');
     drawer.querySelector<HTMLButtonElement>('.drawer-content > button')!.click(); fixture.detectChanges();
-    http.expectOne('/api/public/store-auth/session/logout').flush({}, { status: 503, statusText: 'Unavailable' });
+    http.expectOne('/api/public/store-auth/session/logout').flush({}, { status: 502, statusText: 'Bad Gateway' });
     fixture.detectChanges();
-    expect(drawer.querySelector('[role="alert"]')?.textContent).toContain('Não foi possível encerrar a sessão');
+    expect(TestBed.inject(ToastService).toasts()[0].text).toContain('O servidor não confirmou a saída');
     expect(auth.accountKind()).toBe('customer');
     expect(drawer.querySelector<HTMLButtonElement>('.drawer-content > button')!.disabled).toBe(false);
+    drawer.querySelector<HTMLButtonElement>('.drawer-content > button')!.click();
+    http.expectOne('/api/public/store-auth/session/logout').flush(null);
+    expect(auth.accountKind()).toBeNull();
+    expect(TestBed.inject(ToastService).toasts()).toEqual([]);
+    expect(navigate).toHaveBeenCalledWith('/entrar');
   });
   it('closes quick add only after a confirmed write, with feedback outside the modal', async () => {
     const fixture = setup();
@@ -192,7 +221,6 @@ describe('StorefrontComponent', () => {
     fixture.detectChanges();
     expect(fixture.nativeElement.textContent).toContain('Esta loja ainda não tem produtos disponíveis');
     expect(fixture.nativeElement.querySelector('.filters button').disabled).toBe(true);
-    expect(fixture.nativeElement.querySelector('.header-actions a[href="/carrinho"]')).not.toBeNull();
   });
 
   it('shows real products and paginates without treating a default price as a variant price', () => {

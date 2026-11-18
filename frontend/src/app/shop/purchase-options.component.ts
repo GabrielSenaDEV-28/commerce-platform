@@ -59,7 +59,7 @@ const optionKey = (value: string | null): string | null => value?.trim().toLower
       </form>
       @if (error()) { <p class="field-error">{{ error() }} <a routerLink="/carrinho">Conferir carrinho</a></p> }
       @if (added()) { <div class="message success" role="status">Produto adicionado à sacola. <a routerLink="/carrinho">Ver carrinho</a></div> }
-      <p class="purchase-note">Comprar agora adiciona a seleção à sacola e abre sua revisão, sem remover outros itens. No checkout você poderá criar um pedido pendente. Pagamento online ainda não está disponível.</p>
+      <p class="purchase-note">Comprar agora adiciona a seleção à sacola e abre sua revisão, sem remover outros itens. No checkout você poderá criar um pedido pendente.</p>
       @if (showShipping) { <app-shipping-estimate [productId]="product.id" [variantId]="selected()?.id ?? null" [quantity]="quantity.value" [disabled]="!selected()?.available || quantity.invalid || cart.busy()" /> }
     }`,
   styles: [`

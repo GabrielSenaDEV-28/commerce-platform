@@ -1,5 +1,5 @@
 <div class="admin">
-  <header><a routerLink="/" class="brand">c. <span>commerce</span></a><span class="desktop-label">ÁREA DO LOJISTA</span><button class="desktop-signout" type="button" (click)="logout()" [disabled]="busy()">Sair</button><app-mobile-menu label="Administração" side="right" [profile]="true" [busy]="busy()">@if (sameStore()) { <ng-container *ngTemplateOutlet="adminMenu" /> }<button type="button" (click)="logout()" [disabled]="busy()">Sair da conta</button></app-mobile-menu></header>
+  <header><a routerLink="/" class="brand">c. <span>commerce</span></a><span class="desktop-label">ÁREA DO LOJISTA</span><button class="desktop-signout signout" type="button" (click)="logout()" [disabled]="busy()">Sair</button><app-mobile-menu #profileMenu label="Administração" side="right" [profile]="true" [busy]="busy()">@if (sameStore()) { <ng-container *ngTemplateOutlet="adminMenu" /> }<button type="button" class="signout" (click)="logout(profileMenu)" [disabled]="busy()">Sair da conta</button></app-mobile-menu></header>
   <main>
     <div class="intro"><span class="overline">GESTÃO DA LOJA</span><h1>Seu espaço de administração<span>.</span></h1><p>Organize seu catálogo e acompanhe seus pedidos.</p></div>
     @if (error() && !formOpen()) { <div class="message error" role="alert">{{ error() }}</div> }
@@ -12,13 +12,13 @@
         <ng-template #adminMenu><p>{{ store()?.name }}</p><nav aria-label="Administração">
           @for (link of [{id:'perfil',name:'Perfil e loja'}, {id:'categorias',name:'Categorias'}, {id:'produtos',name:'Produtos'}, {id:'pedidos',name:'Pedidos'}]; track link.id) {
             @if (busy()) { <span class="disabled-link">{{ link.name }}</span> }
-            @else { <a [routerLink]="['/painel', link.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ link.name }} <span>›</span></a> }
+            @else { <a appKeepScroll [routerLink]="['/painel', link.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ link.name }} <span>›</span></a> }
           }
         </nav>
           <details class="future-features"><summary>Em breve</summary><p>Estas áreas ainda não estão disponíveis.</p>
             <nav aria-label="Recursos futuros">@for (link of [{id:'promocoes',name:'Promoções'}, {id:'vendas',name:'Painel de vendas'}, {id:'funcionarios',name:'Funcionários'}, {id:'personalizacao',name:'Personalizar loja'}]; track link.id) {
               @if (busy()) { <span class="disabled-link">{{ link.name }}</span> }
-              @else { <a [routerLink]="['/painel', link.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ link.name }} <small>Em breve</small></a> }
+              @else { <a appKeepScroll [routerLink]="['/painel', link.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ link.name }} <small>Em breve</small></a> }
             }</nav>
           </details>
           <a class="shop" routerLink="/">← Ver minha loja</a></ng-template>
@@ -27,7 +27,6 @@
         <aside><ng-container *ngTemplateOutlet="adminMenu" /></aside>
         <section class="panel" [attr.aria-busy]="loading()">
           @if (success()) { <div class="message success" role="status">{{ success() }}</div> }
-          <div class="panel-progress" role="status">{{ loading() ? 'Atualizando dados...' : '' }}</div>
           <div [attr.inert]="loading() ? '' : null">
           @if (section() === 'perfil') {
             <div class="title"><div><span class="overline">MINHA LOJA</span><h2>Perfil e loja</h2><p>Dados atuais da sua loja.</p></div></div>
@@ -107,7 +106,7 @@
               <p>{{ page.totalElements }} pedido(s) no total</p>
               @if (!page.content.length) { <div class="empty">Nenhum pedido encontrado.</div> }
               @for (raw of page.content; track raw.id) { @let order = asOrder(raw);
-                <app-record-card [staticCard]="true" [label]="'Pedido ' + order.id"><strong>{{ order.customerName }}</strong><p>Pedido {{ order.id }} · {{ order.createdAt | date:'dd/MM/yyyy' }}</p><p>{{ order.total | currency:'BRL':'symbol':'1.2-2':'pt-BR' }} · {{ order.status === 'PENDING' ? 'Pendente' : order.status === 'EXPIRED' ? 'Expirado' : order.status === 'CANCELLED' ? 'Cancelado' : order.status }}</p></app-record-card>
+                <app-record-card [staticCard]="true" [label]="'Pedido ' + order.id"><strong>{{ order.customerName }}</strong><p>Pedido {{ order.id }} · {{ order.createdAt | date:'dd/MM/yyyy' }}</p><p>{{ order.total | currency:'BRL':'symbol':'1.2-2':'pt-BR' }} · {{ order.status === 'PENDING' ? 'Pendente' : order.status === 'EXPIRED' ? 'Expirado' : order.status === 'CANCELLED' ? 'Cancelado' : order.status === 'PAID' ? 'Pago' : order.status === 'PAYMENT_REVIEW' ? 'Pagamento em revisão' : order.status }}</p></app-record-card>
               }
             }
           } @else {
