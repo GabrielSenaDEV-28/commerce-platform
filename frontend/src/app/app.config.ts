@@ -2,7 +2,7 @@ import { ApplicationConfig, inject, provideAppInitializer, provideBrowserGlobalE
 import { firstValueFrom } from 'rxjs';
 import { AuthService } from './auth/auth.service';
 import { DOCUMENT } from '@angular/common';
-import { provideRouter, RouteReuseStrategy } from '@angular/router';
+import { provideRouter, RouteReuseStrategy, withInMemoryScrolling } from '@angular/router';
 import { EditableRouteReuseStrategy } from './editable-route-reuse.strategy';
 import { routes } from './app.routes';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
@@ -18,7 +18,7 @@ export const appConfig: ApplicationConfig = {
     provideHttpClient(withInterceptors([sessionInterceptor])),
     provideAppInitializer(() => ['localhost', '127.0.0.1'].includes(inject(DOCUMENT).location.hostname)
       ? undefined : firstValueFrom(inject(AuthService).restore())),
-    provideRouter(routes),
+    provideRouter(routes, withInMemoryScrolling({ anchorScrolling: 'enabled', scrollPositionRestoration: 'enabled' })),
     { provide: RouteReuseStrategy, useClass: EditableRouteReuseStrategy },
   ]
 };

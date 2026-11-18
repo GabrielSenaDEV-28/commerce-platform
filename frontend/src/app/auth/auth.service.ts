@@ -1,7 +1,8 @@
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
-import { Observable, Subject, catchError, defer, finalize, firstValueFrom, from, map, of, shareReplay, tap, timeout } from 'rxjs';
+import { Observable, Subject, catchError, defer, finalize, firstValueFrom, from, map, of, shareReplay, tap, throwError, timeout } from 'rxjs';
+import { ToastService } from '../ui/toast.service';
 
 export type AccountKind = 'merchant' | 'customer';
 
@@ -25,10 +26,13 @@ export class AuthService {
   private readonly http = inject(HttpClient);
   private readonly session = signal<Session | null>(null);
   private readonly router = inject(Router);
+  private readonly notifications = inject(ToastService);
   private expiryTimer?: ReturnType<typeof setTimeout>;
   private readonly changes = new Subject<'login' | 'logout' | 'expiry' | 'refresh'>();
   readonly sessionChanges = this.changes.asObservable();
   readonly redirectingAfterExpiry = signal(false);
+  private readonly expiry = signal<{ returnUrl: string | null } | null>(null);
+  readonly expiredSession = this.expiry.asReadonly();
   readonly accountKind = computed(() => this.session()?.kind ?? null);
   readonly customerIdentity = computed(() => {
     const current = this.session();
@@ -47,15 +51,31 @@ export class AuthService {
 
   expire(kind: AccountKind, token: string): void {
     if (this.session()?.kind !== kind || this.session()?.tokens.accessToken !== token) return;
+    this.markExpired(safeReturnUrl(this.router.url, kind));
+  }
+
+  private markExpired(returnUrl: string | null): void {
     clearTimeout(this.expiryTimer);
-    this.redirectingAfterExpiry.set(true);
+    this.restorationError.set('');
     this.session.set(null);
     this.generation++;
+    this.expiry.set({ returnUrl });
     this.changes.next('expiry');
-    const returnUrl = safeReturnUrl(this.router.url, kind);
-    void this.router.navigate(['/entrar'], {
-      queryParams: { expired: '1', returnUrl }, replaceUrl: true,
-    }).finally(() => this.redirectingAfterExpiry.set(false));
+  }
+
+  async signInAgain(): Promise<void> {
+    const expired = this.expiry();
+    if (!expired || this.redirectingAfterExpiry()) return;
+    this.redirectingAfterExpiry.set(true);
+    try {
+      if (await this.router.navigate(['/entrar'], { queryParams: { returnUrl: expired.returnUrl }, replaceUrl: true })) {
+        this.expiry.set(null);
+      } else if (this.router.url.split(/[?#]/)[0] === '/entrar') {
+        this.expiry.set(null);
+      }
+    } finally {
+      this.redirectingAfterExpiry.set(false);
+    }
   }
 
   customerAccessToken(): string | null {
@@ -113,9 +133,14 @@ export class AuthService {
           this.restorationError.set('');
           const current = this.session();
           if (current) this.expire(current.kind, current.tokens.accessToken);
+          else if (error.error?.code === 'STORE_SESSION_EXPIRED') this.markExpired(null);
           return of(false);
         }
-        this.restorationError.set('Não foi possível renovar sua sessão. Confira a conexão e tente novamente; sua conta e sacola não foram apagadas.');
+        if (error instanceof HttpErrorResponse && error.status === 404 && !this.session()) {
+          this.restorationError.set('');
+          return of(false);
+        }
+        this.restorationError.set('Não foi possível conectar para verificar sua sessão.');
         return of(false);
       }),
       finalize(() => { this.restoring.set(false); this.refreshRequest = undefined; }),
@@ -134,6 +159,7 @@ export class AuthService {
   private startSession(kind: AccountKind, tokens: TokenResponse, identity: string, browser = false, change: 'login' | 'refresh' = 'login'): void {
     clearTimeout(this.expiryTimer);
     this.redirectingAfterExpiry.set(false);
+    this.expiry.set(null);
     this.restorationError.set('');
     this.session.set({ kind, tokens, identity: browser ? identity : identity.trim().toLowerCase(), browser });
     this.changes.next(change);
@@ -145,15 +171,20 @@ export class AuthService {
 
   logout(): Observable<void> {
     const current = this.session();
-    if (!current) {
-      throw new Error('Não há uma sessão ativa.');
-    }
+    if (!current) return of(undefined);
     const request = current.browser
       ? this.browserRequest<void>('logout', {})
       : this.http.post<void>(`${this.basePath(current.kind)}/logout`, { refreshToken: current.tokens.refreshToken });
-    return request.pipe(tap(() => {
-      this.generation++; clearTimeout(this.expiryTimer); this.session.set(null); this.restorationError.set(''); this.changes.next('logout');
-    }));
+    this.notifications.dismiss('logout');
+    return request.pipe(
+      tap(() => {
+        this.generation++; clearTimeout(this.expiryTimer); this.session.set(null); this.restorationError.set(''); this.changes.next('logout');
+      }),
+      catchError((error: unknown) => {
+        this.notifications.show('logout', 'O servidor não confirmou a saída. Quando a conexão voltar, clique em Sair novamente.');
+        return throwError(() => error);
+      }),
+    );
   }
 
   private basePath(kind: AccountKind): string {

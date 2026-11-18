@@ -38,6 +38,7 @@ import com.gabrielsena.commerce.cart.application.ShoppingCartService;
 import com.gabrielsena.commerce.checkout.application.CheckoutReservationService;
 import com.gabrielsena.commerce.order.application.OrderService;
 import com.gabrielsena.commerce.order.application.OrderCheckoutService;
+import com.gabrielsena.commerce.payment.MercadoPagoSandbox;
 import com.gabrielsena.commerce.customer.application.CustomerAuthService;
 import com.gabrielsena.commerce.customer.application.CustomerProfileService;
 import com.gabrielsena.commerce.inventory.application.InventoryService;
@@ -143,6 +144,9 @@ class CommercePlatformApplicationTests {
 
 	@LocalServerPort
 	private int serverPort;
+
+	@MockitoSpyBean
+	private MercadoPagoSandbox pix;
 
 	@Autowired
 	private OnboardMerchant onboardMerchant;
@@ -269,6 +273,7 @@ class CommercePlatformApplicationTests {
 	@DynamicPropertySource
 	static void configureDatabase(DynamicPropertyRegistry registry) {
 		registry.add("security.jwt.secret", () -> TEST_JWT_SECRET);
+		registry.add("payments.pix.webhook-secret", () -> "local-webhook-fixture");
 		registry.add("shipping.melhor-envio.client-id", () -> "test-client");
 		registry.add("shipping.melhor-envio.client-secret", () -> "test-secret");
 		registry.add("shipping.melhor-envio.user-agent", () -> "Commerce (support@example.test)");
@@ -303,6 +308,99 @@ class CommercePlatformApplicationTests {
 
 	@Test
 	void contextLoads() {
+	}
+
+	@Test
+	void pixShouldReplaceTheDeadlineAndConsumeStockExactlyOnce() throws Exception {
+		checkPix(false);
+	}
+
+	@Test
+	void pixShouldNotConsumeStockAfterTheReservationExpires() throws Exception {
+		checkPix(true);
+	}
+
+	private void checkPix(boolean late) throws Exception {
+		CatalogActor actor = catalogActor();
+		InventoryFixture fixture = inventoryFixture(actor);
+		UUID merchant = merchantAccountRepository.findById(actor.id()).orElseThrow().getMerchantId();
+		var store = storeRepository.findByMerchantId(merchant).orElseThrow();
+		var customer = customerAuthService.register(store.getId(), "Pix Test", "pix@example.com", "a-strong-password");
+		customerProfileService.updateProfile(store.getId(), customer.id(),
+				new CustomerProfileService.ProfileRequest("Pix Test", "11987654321"));
+		storeShippingSettingsService.update(actor.id(), new StoreShippingSettingsService.Settings(
+				"01001000", "Rua A", "10", null, "Centro", "Sao Paulo", "SP", true, null));
+		inventoryService.move(actor.id(), fixture.productId(), fixture.variantId(), MovementType.ENTRY, 3, "Delivery", UUID.randomUUID());
+		String cart = shoppingCartService.create(store.getId()).token();
+		shoppingCartService.setQuantity(store.getId(), cart, fixture.productId(), fixture.variantId(), 1);
+		var checkout = checkoutReservationService.start(store.getId(), cart);
+		assertEquals(1800, jdbcTemplate.queryForObject("""
+				SELECT EXTRACT(EPOCH FROM expires_at - created_at)::int FROM checkout_reservations WHERE reservation_id = ?
+				""", Integer.class, checkout.id()));
+		var order = orderService.create(store.getId(), cart, checkout.id(), customer, false, null, OrderService.FulfillmentType.PICKUP);
+		jdbcTemplate.update("""
+				UPDATE checkout_reservations SET created_at = created_at - interval '5 minutes',
+				    expires_at = expires_at - interval '5 minutes' WHERE reservation_id = ?
+				""", checkout.id());
+		String providerId = "ORD" + UUID.randomUUID().toString().replace("-", "");
+		var issued = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+		doReturn(true).when(pix).enabled();
+		doAnswer(args -> new MercadoPagoSandbox.Remote(providerId, args.getArgument(0).toString(), args.getArgument(1),
+				"pix-test-code", issued, true, false, false, false))
+				.when(pix).create(any(UUID.class), eq(order.total()));
+		String access = customerAuthService.login(store.getId(), "pix@example.com", "a-strong-password").accessToken();
+		String host = store.getSubdomain().getValue() + ".localhost";
+		String path = "/api/public/customer/orders/" + order.id() + "/pix";
+		customerAuthService.register(store.getId(), "Other Customer", "other-pix@example.com", "a-strong-password");
+		String otherAccess = customerAuthService.login(store.getId(), "other-pix@example.com", "a-strong-password").accessToken();
+		mockMvc.perform(post(path).header("Host", host).header("Authorization", "Bearer " + otherAccess))
+				.andExpect(status().isNotFound());
+		mockMvc.perform(post(path).header("Host", host).header("Authorization", "Bearer " + access))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.status").value("PENDING"))
+				.andExpect(jsonPath("$.copyCode").value("pix-test-code"));
+		assertEquals(issued.plusSeconds(1800), jdbcTemplate.queryForObject("""
+				SELECT expires_at FROM checkout_reservations WHERE reservation_id = ?
+				""", java.sql.Timestamp.class, checkout.id()).toInstant());
+		String reference = jdbcTemplate.queryForObject("SELECT reference_id::text FROM sandbox_pix_payments WHERE order_id = ?",
+				String.class, order.id());
+		doReturn(new MercadoPagoSandbox.Remote(providerId, reference, order.total(), "pix-test-code", issued, true,
+				false, false, false)).when(pix).fetch(providerId);
+		mockMvc.perform(post(path).header("Host", host).header("Authorization", "Bearer " + access))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.status").value("PENDING"));
+		assertEquals(issued.plusSeconds(1800), jdbcTemplate.queryForObject("""
+				SELECT expires_at FROM checkout_reservations WHERE reservation_id = ?
+				""", java.sql.Timestamp.class, checkout.id()).toInstant());
+		if (late) {
+			jdbcTemplate.update("""
+					UPDATE checkout_reservations SET expires_at = clock_timestamp() - interval '10 seconds' WHERE reservation_id = ?
+					""", checkout.id());
+		}
+		doReturn(new MercadoPagoSandbox.Remote(providerId, reference, order.total(), "", issued, true,
+				true, false, false)).when(pix).fetch(providerId);
+		String webhook = "/api/public/payments/mercado-pago/webhook";
+		String requestId = UUID.randomUUID().toString();
+		long timestamp = Instant.now().toEpochMilli();
+		mockMvc.perform(post(webhook).param("data.id", providerId).param("type", "order")
+				.header("x-request-id", requestId).header("x-signature", "ts=" + timestamp + ",v1=" + "0".repeat(64)))
+				.andExpect(status().isUnauthorized());
+		assertEquals("PENDING", jdbcTemplate.queryForObject(
+				"SELECT status FROM sandbox_pix_payments WHERE order_id = ?", String.class, order.id()));
+		var hmac = javax.crypto.Mac.getInstance("HmacSHA256");
+		hmac.init(new javax.crypto.spec.SecretKeySpec("local-webhook-fixture".getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+		String manifest = "id:" + providerId.toLowerCase(java.util.Locale.ROOT) + ";request-id:" + requestId + ";ts:" + timestamp + ";";
+		String signature = java.util.HexFormat.of().formatHex(hmac.doFinal(manifest.getBytes(StandardCharsets.UTF_8)));
+		for (int i = 0; i < 2; i++) {
+			mockMvc.perform(post(webhook).param("data.id", providerId).param("type", "order")
+					.header("x-request-id", requestId).header("x-signature", "ts=" + timestamp + ",v1=" + signature))
+					.andExpect(status().isOk());
+			mockMvc.perform(get(path).header("Host", host).header("Authorization", "Bearer " + access))
+					.andExpect(status().isOk()).andExpect(jsonPath("$.status").value(late ? "REVIEW" : "PAID"));
+		}
+		assertEquals(late ? "PAYMENT_REVIEW" : "PAID", orderService.ownedOrder(store.getId(), customer.id(), order.id()).status());
+		assertEquals(late ? 3 : 2, jdbcTemplate.queryForObject("SELECT quantity FROM inventory_balances WHERE variant_id = ?",
+				Integer.class, fixture.variantId()));
+		assertEquals(late ? 0 : 1, jdbcTemplate.queryForObject("SELECT count(*) FROM inventory_movements WHERE sale_order_id = ?",
+				Integer.class, order.id()));
 	}
 
 	@Test
@@ -2306,7 +2404,8 @@ class CommercePlatformApplicationTests {
 				.andExpect(jsonPath("$.code").value("STORE_SESSION_INVALID"))
 				.andExpect(result -> assertEquals("no-store", result.getResponse().getHeader("Cache-Control")))
 				.andReturn());
-		sessionPost(host, "refresh", "{}", "not-a-known-token").andExpect(status().isUnauthorized());
+		sessionPost(host, "refresh", "{}", "not-a-known-token").andExpect(status().isUnauthorized())
+				.andExpect(jsonPath("$.code").value("STORE_SESSION_EXPIRED"));
 		sessionPost(host, "login", credentials(email, "wrong-password"), null).andExpect(status().isUnauthorized())
 				.andExpect(result -> assertNull(result.getResponse().getHeader("Set-Cookie")));
 		sessionPost(host, "register", "{\"name\":\"Dup\",\"email\":\"" + email
@@ -2749,6 +2848,23 @@ class CommercePlatformApplicationTests {
 							.with(request -> { request.setServerName(host); return request; }))
 					.andExpect(status().isOk());
 		}
+		var selection = "{\"variantIds\":[\"" + black + "\"]}";
+		String selectedJson = mockMvc.perform(post("/api/public/checkout").header("Host", host)
+						.header("Cart-Token", token).contentType(APPLICATION_JSON).content(selection))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.items.length()").value(1))
+				.andExpect(jsonPath("$.items[0].variantId").value(black.toString()))
+				.andReturn().getResponse().getContentAsString();
+		String selectedId = JsonPath.read(selectedJson, "$.id");
+		mockMvc.perform(post("/api/public/checkout").header("Host", host)
+						.header("Cart-Token", token).contentType(APPLICATION_JSON).content(selection))
+				.andExpect(status().isOk()).andExpect(jsonPath("$.id").value(selectedId));
+		mockMvc.perform(post("/api/public/checkout").header("Host", host)
+						.header("Cart-Token", token).contentType(APPLICATION_JSON)
+						.content("{\"variantIds\":[\"" + white + "\"]}"))
+				.andExpect(status().isConflict());
+		mockMvc.perform(post("/api/public/checkout/{id}/cancel", selectedId)
+						.header("Host", host).header("Cart-Token", token))
+				.andExpect(status().isOk());
 		inventoryService.move(actor.id(), product.getId(), white, MovementType.EXIT, 1, "Adjustment", UUID.randomUUID());
 		String checkout = mockMvc.perform(post("/api/public/checkout").header("Cart-Token", token)
 						.with(request -> { request.setServerName(host); return request; }))
@@ -3283,7 +3399,7 @@ class CommercePlatformApplicationTests {
 		shoppingCartService.setQuantity(store, token, fixture.productId(), fixture.variantId(), 1);
 		var first = checkoutReservationService.start(store, token);
 		assertEquals("ACTIVE", first.status());
-		assertEquals(1200, java.time.Duration.between(
+		assertEquals(1800, java.time.Duration.between(
 				jdbcTemplate.queryForObject("SELECT created_at FROM checkout_reservations WHERE reservation_id = ?",
 						java.sql.Timestamp.class, first.id()).toInstant(), first.expiresAt()).getSeconds());
 		jdbcTemplate.update("""

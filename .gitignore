@@ -5,6 +5,7 @@ target/
 !**/src/test/**/target/
 README.md
 /docs/architecture/adr/PROJECT_CONTEXT.md
+/.env
 
 ### STS ###
 .apt_generated

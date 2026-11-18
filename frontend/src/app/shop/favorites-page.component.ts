@@ -13,7 +13,6 @@ interface FavoriteEntry { id: string; product: PublicProduct | null; unavailable
 @Component({
   imports: [...UI, RouterLink, CurrencyPipe],
   template: `
-    <header class="shop-header"><a class="brand" routerLink="/">c. <span>commerce</span></a><a routerLink="/carrinho">Minha sacola</a></header>
     <main class="shop-wrap">
       <nav class="breadcrumbs" aria-label="Navegação estrutural"><a routerLink="/">Início</a><span>/</span><span aria-current="page">Meus favoritos</span></nav>
       <h1>Meus favoritos.</h1>

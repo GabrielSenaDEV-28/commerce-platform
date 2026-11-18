@@ -115,8 +115,10 @@ checkout through the recovered bag, not an automatic settings/checkout
 redirect. Expiration takes precedence over unsaved changes; no form
 drafts or authentication tokens are saved in browser storage.
 The customer account provides profile editing, address management, and an
-order list through existing authenticated APIs. Payment methods, email and
-password changes are explicitly unavailable and collect no payment credentials.
+order list through existing authenticated APIs. The account menu links directly
+to payment information; test Pix is issued from order details when enabled.
+Saved cards, email changes and password changes are not available. Switching
+sections from the account or admin panel menu does not reset the page scroll.
 Product cards open a public product page with a photo gallery, description,
 variant selection, effective variant prices, quantity validation and product
 shipping estimates by postal code. Quick add from the listing opens the same
@@ -158,8 +160,8 @@ reservation prices, selects a saved delivery address and reserved-item shipping
 service or available store pickup, and creates a pending order. Partial orders
 require explicit consent. Profile/address editing reuses existing account screens
 with a return link. Order cards open authenticated, owner-scoped details with
-server snapshots and a manual status refresh. Payment and installments remain
-explicitly unavailable. Pre-checkout shipping estimates
+server snapshots and a manual status refresh. Opt-in sandbox Pix is available
+for testing; production payments and installments are not supported. Pre-checkout shipping estimates
 require configured shipping integration and variant measurements, do not
 reserve stock and are invalidated when their inputs change.
 Category filtering, storefront settings, sales dashboard and per-store branding
@@ -184,8 +186,11 @@ in `frontend/README.md` under "Decisões de acabamento".
 
 ### Mobile navigation, product actions and local favorites
 
-At widths up to 720px, the storefront uses a sticky, compact header with the
-brand, a left-hand menu trigger and accessible account/bag icons. The shared
+The storefront keeps a sticky header across routes, with a stronger background
+and shadow on scroll. On desktop, navigation is centered and the account icon
+links directly to the account page. Account, favorites and bag icons fill on
+hover and stay filled for the current section. At widths up to 720px, the header
+switches to compact navigation with a left-hand menu trigger. The shared
 `MobileMenuComponent` uses a native modal dialog for keyboard focus, Escape and
 backdrop dismissal. The left menu includes "Início"; the mobile profile icon
 opens a separate right-hand drawer directly, without navigating to settings first.
@@ -194,8 +199,7 @@ anonymous. Account and administration screens also open their menus on the right
 Both sides slide in/out over 260ms with a fading backdrop, respecting reduced
 motion preferences. Its navigation closes after successful navigation, including
 visits to the current URL; cancelled unsaved-change navigation keeps it open.
-Customer and merchant settings reuse the desktop menu templates inside this
-drawer and hide the desktop sidebar on mobile. Existing section URLs remain the
+Account and administration hide their desktop sidebars on mobile. Existing section URLs remain the
 source of navigation: each section gets the mobile content area without creating
 duplicate screens, forms or APIs. Desktop layout is preserved. Writes still
 block navigation and menu dismissal. Categories and offers are explicitly
@@ -285,8 +289,8 @@ After successful creation the bag remains tied to that active reservation; a new
 checkout review is offered explicitly after its deadline, without hiding or
 automatically cancelling the previous order.
 
-Payment remains the next transactional increment and needs provider selection,
-idempotent webhooks, expiration and atomic reservation-to-sale conversion.
+The opt-in Mercado Pago sandbox exercises Pix expiration, idempotent
+reconciliation, and atomic reservation-to-sale conversion without payouts.
 Search/filter/sort must cover the whole server-side catalog,
 not only a loaded page. Promotions need authoritative prices/validity, sales
 dashboards need server-side aggregates and staff management needs server-enforced
@@ -932,13 +936,29 @@ includes the requested quantity, price at checkout, `reserved`, and the
 available quantity observed when checkout began. An item is either fully
 reserved or not reserved at all. If none can be reserved, the response is
 `UNAVAILABLE`, with no ID or expiry, and the cart remains editable. An empty
-cart returns `409`. A repeated start while active returns the same reservation
+cart returns `409`. The storefront sends the checked variants as `variantIds`;
+only those cart lines can be reserved, quoted, and included in the order. The
+customer can register a delivery address from checkout and return with the
+address selected without resetting any active reservation. A repeat with a
+different selection cannot replace an active reservation. A repeated start
+with the same selection returns the same reservation
 and deadline, including the original unavailable items.
 
-Reservations expire 20 minutes after creation according to the database clock.
+Reservations expire 30 minutes after creation according to the database clock.
+Opening the checkout page does not start the timer: the customer explicitly
+requests stock review and reservation. Reloading or reusing an active reservation
+does not reset its deadline.
+
+In the Mercado Pago Pix sandbox, creating a charge replaces the
+remaining checkout time with the charge deadline (30 minutes from issuance),
+once per order. It will not add the remaining checkout time to the charge
+duration. For example, a reservation created at 14:00 and a Pix issued at 14:05
+will expire at 14:35, not 15:00. Reloads, retries and status checks must not
+restart either timer. A confirmation received after stock is released must not
+automatically commit inventory or unblock fulfillment.
 They cease consuming stock at expiration without a browser or scheduled job.
 `GET /api/public/checkout` returns the latest checkout with status `ACTIVE`,
-`EXPIRED`, or `CANCELLED`; an absent checkout returns `404`.
+`EXPIRED`, `CANCELLED`, or `COMPLETED`; an absent checkout returns `404`.
 `POST /api/public/checkout/{reservationId}/cancel` releases that active reservation;
 an outdated ID or no active reservation returns `409`. During an active reservation cart changes
 return `409`; cancel first to modify it. Attempts to reduce physical stock below
@@ -1051,14 +1071,14 @@ cancellation even after an order is created, so it remains a sensitive secret.
 Orders and personal data are retained without automatic deletion;
 retention, privacy policy and secure customer recovery require future design.
 
-This block does not implement shipping calculation, order confirmation, payment
-processing or physical stock deduction.
-A payment provider (such as PagBank or Mercado Pago) has not been selected.
-Payment data handling, provider integration, payment
-expiration, asynchronous confirmation, secure webhooks, idempotency, and
-atomic reservation-to-sale conversion require a separate design. Do not store
-card numbers or security codes in this application. Without those capabilities,
-pending orders cannot be paid or fulfilled.
+Creating an order does not charge the customer. In local development, an opt-in
+Mercado Pago sandbox integration issues a test Pix from the order's stored
+total. A signed Orders webhook or a manual status check uses an authenticated
+provider lookup to verify confirmation. A valid confirmation consumes the
+reservation and records the inventory exit once. A confirmation after stock
+release sets `PAYMENT_REVIEW` without deducting stock or authorizing fulfillment.
+Production payments, merchant payouts, and card processing are out of scope.
+See [local development](local-development.md#mercado-pago-pix-sandbox) for setup.
 
 #### Planned fulfillment status
 
@@ -1073,9 +1093,10 @@ updates are not implemented.
 
 For store pickup, the planned sequence is preparing, ready for pickup, and
 picked up. The merchant manually advances it after payment confirmation.
-These are future fulfillment states, distinct from the current reservation-
-derived pending, expired and cancelled order status. No payment confirmation,
-manual fulfillment transitions or tracking integration is available yet.
+These are future fulfillment states, distinct from the current pending, expired,
+cancelled, paid and payment-review order states. Sandbox payment confirmation
+does not start fulfillment. Manual fulfillment transitions and tracking
+integration are not implemented.
 
 #### Customer accounts
 

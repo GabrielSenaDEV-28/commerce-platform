@@ -175,7 +175,7 @@ public class ShippingEstimateService {
                 JOIN catalog_product_variants v ON v.store_id = i.store_id AND v.product_id = i.product_id
                     AND v.variant_id = i.variant_id
                 WHERE r.store_id = ? AND r.cart_id = ? AND r.reservation_id = ?
-                    AND r.cancelled_at IS NULL AND r.expires_at > clock_timestamp() AND i.reserved
+                    AND r.cancelled_at IS NULL AND r.consumed_at IS NULL AND r.expires_at > clock_timestamp() AND i.reserved
                 ORDER BY i.product_id, i.variant_id
                 """, (rs, row) -> item(rs, rs.getInt("quantity"), true), store, cartId, reservationId);
         if (items.isEmpty()) {
@@ -188,7 +188,7 @@ public class ShippingEstimateService {
         return jdbc.query("""
                 SELECT expires_at FROM checkout_reservations
                 WHERE store_id = ? AND cart_id = ? AND reservation_id = ?
-                    AND cancelled_at IS NULL AND expires_at > clock_timestamp()
+                    AND cancelled_at IS NULL AND consumed_at IS NULL AND expires_at > clock_timestamp()
                 """, (rs, row) -> rs.getTimestamp(1).toInstant(), store, cartId, reservationId).stream()
                 .findFirst().orElseThrow(() ->
                         new ResponseStatusException(HttpStatus.CONFLICT, "Checkout reservation is not active."));

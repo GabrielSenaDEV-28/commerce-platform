@@ -12,6 +12,7 @@ import { VariantOption, VariantOptionsComponent } from './variant-options.compon
 import { confirmDiscard, watchUnsavedChanges } from '../unsaved-changes';
 import { applyServerFieldErrors } from '../ui/validation';
 import { CopyLinkComponent } from '../ui/copy-link.component';
+import { KeepScrollDirective } from '../ui/keep-scroll.directive';
 
 interface Page<T> { content: T[]; page: number; totalPages: number; totalElements: number }
 interface TypeItem { id: string; name: string; hasColor: boolean; hasSize: boolean; sizeFormat: 'LETTER' | 'NUMERIC' | null; active: boolean }
@@ -21,7 +22,7 @@ interface StoreInfo { name: string; subdomain: string }
 
 @Component({
   selector: 'app-merchant-admin',
-  imports: [...UI, ReactiveFormsModule, RouterLink, RouterLinkActive, CurrencyPipe, DatePipe, VariantOptionsComponent, CopyLinkComponent, NgTemplateOutlet, MobileMenuComponent],
+  imports: [...UI, ReactiveFormsModule, RouterLink, RouterLinkActive, CurrencyPipe, DatePipe, VariantOptionsComponent, CopyLinkComponent, NgTemplateOutlet, MobileMenuComponent, KeepScrollDirective],
   templateUrl: './merchant-admin.component.html',
   styleUrl: './merchant-admin.component.css',
 })
@@ -228,13 +229,13 @@ export class MerchantAdminComponent {
       error: (error: unknown) => { this.busy.set(false); this.handleError(error); },
     });
   }
-  protected logout(): void {
+  protected logout(menu?: MobileMenuComponent): void {
     if (this.busy()) return;
     if (this.hasUnsavedChanges() && !confirmDiscard(this.document.defaultView)) return;
     this.busy.set(true);
     this.auth.logout().pipe(takeUntilDestroyed(this.destroy)).subscribe({
       next: () => { this.formOpen.set(false); this.busy.set(false); void this.router.navigateByUrl('/entrar'); },
-      error: () => { this.busy.set(false); this.error.set('Não foi possível sair. Tente novamente.'); },
+      error: () => { this.busy.set(false); menu?.close(); },
     });
   }
   protected asType(item: TypeItem | Product | Order): TypeItem { return item as TypeItem; }

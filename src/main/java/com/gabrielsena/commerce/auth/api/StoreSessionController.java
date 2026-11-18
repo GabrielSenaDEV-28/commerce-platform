@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.util.WebUtils;
 
 /** Browser login/session API: the refresh token is only ever exchanged through an HttpOnly cookie. */
 @RestController
@@ -78,7 +79,8 @@ public class StoreSessionController {
     public ResponseEntity<ProblemDetail> handleInvalidSession(HttpServletRequest request) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNAUTHORIZED,
                 "Store session is missing or invalid.");
-        problem.setProperty("code", "STORE_SESSION_INVALID");
+        var cookie = WebUtils.getCookie(request, StoreSessionCookies.NAME);
+        problem.setProperty("code", cookie == null ? "STORE_SESSION_INVALID" : "STORE_SESSION_EXPIRED");
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).cacheControl(CacheControl.noStore())
                 .header(HttpHeaders.SET_COOKIE, cookies.clear(request)).body(problem);
     }

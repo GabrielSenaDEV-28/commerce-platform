@@ -4,7 +4,7 @@ import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
-import { AccountKind, AuthService } from '../auth/auth.service';
+import { AccountKind, AuthService, safeReturnUrl } from '../auth/auth.service';
 import { watchUnsavedChanges } from '../unsaved-changes';
 import { StoreNavigation } from '../auth/store-navigation.service';
 import { applyServerFieldErrors } from '../ui/validation';
@@ -98,7 +98,10 @@ export class RegisterComponent {
         this.loading.set(false);
         if (kind === 'merchant' && this.storeAddress()) this.navigation.open(`${this.storeAddress()}/entrar`);
         else if (kind === 'merchant') this.error.set('A loja foi criada, mas seu endereço de acesso não pôde ser determinado neste ambiente. Não repita o cadastro; confira a configuração de domínio com o suporte.');
-        else void this.router.navigateByUrl('/', { replaceUrl: true });
+        else {
+          const destination = safeReturnUrl(this.route.snapshot.queryParamMap.get('returnUrl'), 'customer');
+          void this.router.navigateByUrl(destination?.split(/[?#]/)[0] === '/checkout' ? destination : '/', { replaceUrl: true });
+        }
       },
       error: (error: unknown) => {
         if (!applyServerFieldErrors(this.form, error)) {

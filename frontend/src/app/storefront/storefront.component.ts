@@ -2,29 +2,23 @@ import { UI } from '../ui/ui';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Component, DestroyRef, ElementRef, ViewChild, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { Router, RouterLink } from '@angular/router';
-import { AuthService } from '../auth/auth.service';
+import { RouterLink } from '@angular/router';
 import { CartService, cartError } from '../shop/cart.service';
 import { PurchaseOptionsComponent } from '../shop/purchase-options.component';
 import { watchUnsavedChanges } from '../unsaved-changes';
 import { Page, PublicProduct } from '../shop/shop.models';
-import { MobileMenuComponent } from '../ui/mobile-menu.component';
 import { FavoritesService } from '../shop/favorites.service';
 import { ProductCardComponent } from '../shop/product-card.component';
 
 @Component({
   selector: 'app-storefront',
-  imports: [...UI, RouterLink, PurchaseOptionsComponent, MobileMenuComponent, ProductCardComponent],
+  imports: [...UI, RouterLink, PurchaseOptionsComponent, ProductCardComponent],
   templateUrl: './storefront.component.html',
   styleUrl: './storefront.component.css',
 })
 export class StorefrontComponent {
   private readonly http = inject(HttpClient);
   private readonly destroyRef = inject(DestroyRef);
-  private readonly router = inject(Router);
-  protected readonly signingOut = signal(false);
-  protected readonly logoutError = signal('');
-  protected readonly auth = inject(AuthService);
   protected readonly cart = inject(CartService);
   protected readonly favorites = inject(FavoritesService);
   protected readonly actionMessage = signal('');
@@ -40,19 +34,11 @@ export class StorefrontComponent {
 
   constructor() {
     watchUnsavedChanges(this);
-    this.cart.load().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({ error: () => { /* The global recovery banner provides retry actions. */ } });
+    this.cart.load().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({ error: () => { /* Reported by the global recovery toast. */ } });
     this.load(0);
   }
   hasUnsavedChanges(): boolean { return false; }
-  isSaving(): boolean { return this.cart.busy() || this.signingOut(); }
-  protected logout(): void {
-    if (this.isSaving() || !this.auth.accountKind()) return;
-    this.signingOut.set(true); this.logoutError.set('');
-    this.auth.logout().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
-      next: () => { this.signingOut.set(false); void this.router.navigateByUrl('/entrar'); },
-      error: () => { this.signingOut.set(false); this.logoutError.set('Não foi possível encerrar a sessão. Tente novamente.'); },
-    });
-  }
+  isSaving(): boolean { return this.cart.busy(); }
   protected purchaseConfirmed(product: PublicProduct): void {
     this.closePurchase();
     this.actionMessage.set(`${product.name} adicionado à sacola.`);

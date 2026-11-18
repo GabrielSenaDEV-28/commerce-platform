@@ -1,9 +1,4 @@
 <div class="shop-page">
-  <header class="shop-header"><a class="brand" routerLink="/">c. <span>commerce</span></a><nav aria-label="Navegação da loja">
-    <a [routerLink]="auth.accountKind() === 'merchant' ? '/painel/perfil' : auth.accountKind() === 'customer' ? '/conta/perfil' : '/entrar'">{{ auth.accountKind() === 'merchant' ? 'Administração' : auth.accountKind() === 'customer' ? 'Minha conta' : 'Entrar' }}</a>
-    <a routerLink="/carrinho" [attr.aria-label]="'Sacola com ' + cart.count() + ' itens'">Sacola ({{ cart.count() }})</a>
-    <a routerLink="/favoritos">Favoritos</a>
-  </nav></header>
   <main class="shop-wrap">
     <nav class="breadcrumbs" aria-label="Navegação estrutural"><a routerLink="/">Início</a><span>/</span><span aria-current="page">{{ product()?.name ?? 'Produto' }}</span></nav>
     @if (loading()) { <div class="product-layout skeleton" role="status" aria-label="Carregando produto"><div class="skeleton-image shimmer"></div><div><div class="skeleton-line shimmer"></div><div class="skeleton-line shimmer"></div><div class="skeleton-image shimmer"></div></div></div> }

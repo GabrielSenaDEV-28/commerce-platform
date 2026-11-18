@@ -1,6 +1,5 @@
 import { UI } from '../ui/ui';
 import { CurrencyPipe, DatePipe, DOCUMENT, NgTemplateOutlet } from '@angular/common';
-import { MobileMenuComponent } from '../ui/mobile-menu.component';
 import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
 import { Component, DestroyRef, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
@@ -10,6 +9,8 @@ import { EMPTY, Observable, catchError, distinctUntilChanged, map, switchMap, ta
 import { AuthService } from '../auth/auth.service';
 import { confirmDiscard, watchUnsavedChanges } from '../unsaved-changes';
 import { applyServerFieldErrors } from '../ui/validation';
+import { ToastService } from '../ui/toast.service';
+import { KeepScrollDirective } from '../ui/keep-scroll.directive';
 import { AddressInput, CustomerAddress as Address, CustomerProfile as Profile } from './customer.models';
 interface OrderSummary { id: string; status: string; createdAt: string; total: number; fulfillmentType: string }
 interface OrderPage { content: OrderSummary[]; page: number; totalPages: number }
@@ -20,7 +21,7 @@ const requiredText = (max: number) => [Validators.required, Validators.pattern(/
 
 @Component({
   selector: 'app-customer-account',
-  imports: [...UI, ReactiveFormsModule, RouterLink, RouterLinkActive, CurrencyPipe, DatePipe, NgTemplateOutlet, MobileMenuComponent],
+  imports: [...UI, ReactiveFormsModule, RouterLink, RouterLinkActive, CurrencyPipe, DatePipe, NgTemplateOutlet, KeepScrollDirective],
   templateUrl: './customer-account.component.html',
   styleUrl: './customer-account.component.css',
 })
@@ -31,9 +32,11 @@ export class CustomerAccountComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly forms = inject(FormBuilder);
   private readonly auth = inject(AuthService);
+  private readonly notifications = inject(ToastService);
   private readonly document = inject(DOCUMENT);
   protected readonly section = signal<Section>('perfil');
   protected readonly returnToCheckout = this.route.snapshot.queryParamMap.get('returnTo') === 'checkout';
+  protected readonly checkoutItems = this.route.snapshot.queryParamMap.getAll('item');
   protected readonly loading = signal(false);
   protected readonly busy = signal(false);
   protected readonly error = signal('');
@@ -51,7 +54,7 @@ export class CustomerAccountComponent {
     name: ['', requiredText(150)], phone: ['', [Validators.required, Validators.pattern(/^\d{10,11}$/)]],
   });
   protected readonly addressForm = this.forms.nonNullable.group({
-    recipient: ['', requiredText(150)], postalCode: ['', [Validators.required, Validators.pattern(/^\d{8}$/)]],
+    recipient: ['', requiredText(150)], postalCode: ['', [Validators.required, Validators.pattern(/^\d{5}-?\d{3}$/)]],
     street: ['', requiredText(150)], number: ['', requiredText(30)],
     complement: ['', Validators.maxLength(150)], district: ['', requiredText(100)],
     city: ['', requiredText(100)], state: ['', [Validators.required, Validators.pattern(/^(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)$/)]],
@@ -93,7 +96,10 @@ export class CustomerAccountComponent {
           this.profileForm.reset({ name: profile.name, phone: profile.phone ?? '' });
         }))
       : section === 'enderecos'
-        ? this.http.get<Address[]>('/api/public/customer/addresses', { headers: this.headers() }).pipe(tap((addresses) => this.addresses.set(addresses)))
+        ? this.http.get<Address[]>('/api/public/customer/addresses', { headers: this.headers() }).pipe(tap((addresses) => {
+            this.addresses.set(addresses);
+            if (this.returnToCheckout && this.route.snapshot.queryParamMap.get('novo') === '1' && addresses.length < 10) this.startAddress();
+          }))
         : this.http.get<OrderPage>('/api/public/customer/orders?page=0&size=10', { headers: this.headers() }).pipe(tap((orders) => this.orders.set(orders)));
     return request.pipe(
       tap(() => this.loading.set(false)),
@@ -108,6 +114,7 @@ export class CustomerAccountComponent {
 
   private handleError(error: unknown): void {
     if (error instanceof HttpErrorResponse && error.status === 401) {
+      if (this.auth.expiredSession() || this.auth.restorationError()) return;
       this.expired.set(true);
       this.error.set('Sua sessão expirou ou não é mais válida. Encerre a sessão e entre novamente.');
     } else if (error instanceof HttpErrorResponse && error.status === 403) {
@@ -155,7 +162,7 @@ export class CustomerAccountComponent {
     this.busy.set(true); this.error.set(''); this.success.set('');
     const value = this.addressForm.getRawValue();
     const body: AddressInput = {
-      ...value, recipient: value.recipient.trim(), street: value.street.trim(), number: value.number.trim(),
+      ...value, postalCode: value.postalCode.replace('-', ''), recipient: value.recipient.trim(), street: value.street.trim(), number: value.number.trim(),
       complement: value.complement.trim(), district: value.district.trim(), city: value.city.trim(),
     };
     const id = this.editId();
@@ -166,7 +173,12 @@ export class CustomerAccountComponent {
     request.pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: (address) => {
         this.addresses.update((items) => id ? items.map((item) => item.id === id ? address : item) : [...items, address]);
-        this.editingAddress.set(false); this.success.set('Endereço salvo.'); this.busy.set(false);
+        this.editingAddress.set(false); this.busy.set(false);
+        this.notifications.show('address-saved', 'Endereço salvo.', 'success');
+        if (this.returnToCheckout) {
+          this.addressForm.markAsPristine();
+          void this.router.navigate(['/checkout'], { queryParams: { item: this.checkoutItems, address: address.id, returning: '1' } });
+        }
       },
       error: (error: unknown) => { if (!applyServerFieldErrors(this.addressForm, error)) this.handleError(error); this.busy.set(false); },
     });
@@ -198,7 +210,7 @@ export class CustomerAccountComponent {
     this.busy.set(true); this.error.set('');
     this.auth.logout().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: () => { this.profileForm.markAsPristine(); this.addressForm.markAsPristine(); this.busy.set(false); void this.router.navigateByUrl('/entrar'); },
-      error: () => { this.error.set('Não foi possível encerrar a sessão. Tente novamente.'); this.busy.set(false); },
+      error: () => this.busy.set(false),
     });
   }
 }

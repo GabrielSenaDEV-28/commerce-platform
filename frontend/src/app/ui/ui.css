@@ -2,11 +2,12 @@
   font-family:inherit; border-radius:6px; cursor:pointer;
   transition:background-color .18s,color .18s,border-color .18s,box-shadow .18s,transform .18s;
 }
-.ui-button:where(:not(.icon-action):not(.ui-record-overlay):not(.choice)), .ui-link.button { padding:10px 15px; border:1px solid #d5e0d3; background:white; color:#315d42; font-size:.82rem; }
+.ui-button:where(:not(.icon-action):not(.ui-record-overlay):not(.choice)), .ui-link.button { padding:.625rem .9375rem; border:1px solid #d5e0d3; background:white; color:#315d42; font-size:.875rem; line-height:1.35; }
 .ui-button.primary, .ui-button.button, .ui-link.button { background:#294b40; color:white; border-color:#294b40; }
 .ui-link:where(:not(.brand):not(.wordmark):not(.hero-link):not(.button):not(.ui-record-main)) { color:#315d42; text-decoration:none; transition:color .18s; }
 .ui-link:where(:not(.brand):not(.wordmark):not(.hero-link):not(.button):not(.ui-record-main)):hover { color:#1e4635; text-decoration:underline; text-underline-offset:3px; }
 .ui-link.button { display:inline-block; border-radius:6px; text-decoration:none; transition:background-color .18s; }
+.ui-link.button.secondary { background:white; color:#315d42; border-color:#d5e0d3; }
 .ui-input:where(:not([type="checkbox"]):not([type="color"]):not([type="file"])) { border:1px solid #d5e0d3; border-radius:5px; background:white; color:#263d36; font:inherit; padding:10px 12px; }
 .ui-input[aria-invalid="true"] { border-color:#b7594f; }
 .ui-notice.success { background:#edf5e9; color:#315d42; }
@@ -18,6 +19,8 @@
   background-color:#3b6654; color:white; border-color:#3b6654;
 }
 .ui-button:disabled { cursor:not-allowed; opacity:.5; }
+.ui-button.signout { background:#fff0ee; color:#842f2b; border-color:#ecc7c3; }
+.ui-button.signout:not(:disabled):hover { background:#f9ddda; color:#702521; border-color:#dbaba6; }
 .ui-button:focus-visible { outline:3px solid #dcb875; outline-offset:3px; }
 .ui-record-content strong, .ui-record-content .product-name { font:400 1.15rem Georgia,serif; color:#294b40; }
 .ui-record-content p, .ui-record-content small { color:#52675c; font-size:.8rem; line-height:1.6; margin:5px 0 0; }

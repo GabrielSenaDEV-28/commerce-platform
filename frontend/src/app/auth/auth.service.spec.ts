@@ -128,7 +128,7 @@ describe('AuthService', () => {
     expect(auth.accountKind()).toBe('customer');
   });
 
-  it('expires the session at the duration returned by the server and preserves the destination', () => {
+  it('expires the session and only opens login on request, preserving the destination', async () => {
     vi.useFakeTimers();
     const router = TestBed.inject(Router);
     vi.spyOn(router, 'url', 'get').mockReturnValue('/painel/produtos/p1/variantes/v1');
@@ -140,8 +140,10 @@ describe('AuthService', () => {
     vi.advanceTimersByTime(1);
     expect(auth.accountKind()).toBeNull();
     expect(auth.merchantAccessToken()).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
+    await auth.signInAgain();
     expect(navigate).toHaveBeenCalledWith(['/entrar'], {
-      queryParams: { expired: '1', returnUrl: '/painel/produtos/p1/variantes/v1' }, replaceUrl: true,
+      queryParams: { returnUrl: '/painel/produtos/p1/variantes/v1' }, replaceUrl: true,
     });
   });
 

@@ -2,8 +2,8 @@ import { CurrencyPipe, DatePipe } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { Router, RouterLink } from '@angular/router';
-import { Observable, finalize, forkJoin, interval } from 'rxjs';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { Observable, catchError, finalize, forkJoin, interval, throwError } from 'rxjs';
 import { watchUnsavedChanges } from '../unsaved-changes';
 import { UI } from '../ui/ui';
 import { CheckoutQuote, CreateOrder, PickupOption, ReservationItem } from './checkout.models';
@@ -19,6 +19,7 @@ import { CheckoutService, checkoutError } from './checkout.service';
 export class CheckoutPageComponent {
   protected readonly checkout = inject(CheckoutService);
   private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
   private readonly destroy = inject(DestroyRef);
   protected readonly loading = signal(false);
   protected readonly error = signal('');
@@ -27,6 +28,17 @@ export class CheckoutPageComponent {
   protected readonly pickup = signal<PickupOption | null>(null);
   protected readonly fulfillment = signal<'DELIVERY' | 'PICKUP'>('DELIVERY');
   protected readonly addressId = signal('');
+  protected readonly variantIds = signal(this.route.snapshot.queryParamMap.getAll('item'));
+  protected readonly reservationConflict = computed(() => {
+    const selection = this.variantIds();
+    const items = this.checkout.reservation()?.items ?? [];
+    return this.active() && selection.length > 0 &&
+      (selection.length !== items.length || items.some((item) => !selection.includes(item.variantId)));
+  });
+  protected readonly selectedCartItems = computed(() => {
+    const selection = this.variantIds();
+    return (this.checkout.cart.cart()?.items ?? []).filter((item) => !selection.length || selection.includes(item.variantId));
+  });
   protected readonly quote = signal<CheckoutQuote | null>(null);
   protected readonly serviceId = signal<number | null>(null);
   protected readonly partial = signal(false);
@@ -61,10 +73,14 @@ export class CheckoutPageComponent {
     this.loading.set(true); this.error.set(''); this.profile.set(null); this.resetSelection();
     forkJoin({ profile: this.checkout.profile(), addresses: this.checkout.addresses(), pickup: this.checkout.pickup(), cart: this.checkout.cart.load() })
       .pipe(finalize(() => this.loading.set(false)), takeUntilDestroyed(this.destroy)).subscribe({
-        next: ({ profile, addresses, pickup }) => {
+        next: ({ profile, addresses, pickup, cart }) => {
           this.profile.set(profile); this.addresses.set(addresses); this.pickup.set(pickup);
-          if (!addresses.some((address) => address.id === this.addressId())) this.addressId.set('');
+          const preferred = this.route.snapshot.queryParamMap.get('address') ?? this.addressId();
+          this.addressId.set(addresses.find((address) => address.id === preferred)?.id ?? (addresses.length === 1 ? addresses[0].id : ''));
           if (!pickup.available) this.fulfillment.set('DELIVERY');
+          if (cart && this.route.snapshot.queryParamMap.has('returning') && !this.checkout.reservation()) {
+            queueMicrotask(() => { if (!this.destroy.destroyed) this.restoreReservation(); });
+          }
         },
         error: (error: unknown) => this.error.set(checkoutError(error)),
       });
@@ -72,12 +88,32 @@ export class CheckoutPageComponent {
   protected start(): void {
     if (this.isSaving() || this.checkout.pending()) return;
     this.resetSelection(); this.partial.set(false); this.submitted.set(false);
-    this.run(this.checkout.start());
+    const ids = this.variantIds();
+    this.run(this.checkout.start(ids.length ? ids : undefined).pipe(catchError((error: unknown) => {
+      if (error instanceof HttpErrorResponse && error.status === 409 && ids.length) {
+        queueMicrotask(() => { if (!this.destroy.destroyed) this.restoreReservation(); });
+      }
+      return throwError(() => error);
+    })));
+  }
+  private restoreReservation(): void {
+    this.checkout.refresh().pipe(takeUntilDestroyed(this.destroy)).subscribe({
+      error: (error: unknown) => {
+        if (!(error instanceof HttpErrorResponse) || error.status !== 404) this.error.set(checkoutError(error));
+      },
+    });
+  }
+  protected useExistingSelection(): void {
+    const ids = this.checkout.reservation()?.items.map((item) => item.variantId) ?? [];
+    this.variantIds.set(ids);
+    this.error.set('');
+    void this.router.navigate([], { relativeTo: this.route, queryParamsHandling: 'merge', queryParams: { item: ids }, replaceUrl: true });
   }
   protected nextOrder(): void {
     if (this.isSaving() || this.active() || this.checkout.pending()) return;
     this.checkout.beginNext(); this.resetSelection(); this.partial.set(false); this.submitted.set(false);
-    this.load();
+    if (this.variantIds().length) void this.router.navigateByUrl('/carrinho');
+    else this.load();
   }
   protected refreshReservation(): void {
     if (this.isSaving() || this.checkout.pending()) return;
@@ -103,7 +139,7 @@ export class CheckoutPageComponent {
   private resetSelection(): void { this.quote.set(null); this.serviceId.set(null); }
   protected calculate(): void {
     const address = this.selectedAddress();
-    if (this.isSaving() || !this.active() || !address || this.checkout.pending()) return;
+    if (this.isSaving() || !this.active() || this.reservationConflict() || !address || this.checkout.pending()) return;
     this.resetSelection();
     this.run(this.checkout.quote(address.postalCode), (quote) => this.quote.set(quote));
   }
@@ -111,7 +147,7 @@ export class CheckoutPageComponent {
     if (this.isSaving()) return;
     this.submitted.set(true);
     const pending = this.checkout.pending();
-    if (!pending && (!this.active() || !this.profile()?.phone || (this.partialRequired() && !this.partial())
+    if (!pending && (!this.active() || this.reservationConflict() || !this.profile()?.phone || (this.partialRequired() && !this.partial())
       || (this.fulfillment() === 'PICKUP' ? !this.pickup()?.available
         : !this.selectedAddress() || !this.selectedService() || !this.quoteValid()))) return;
     const body: CreateOrder = pending?.body ?? {

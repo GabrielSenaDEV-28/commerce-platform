@@ -76,8 +76,8 @@ describe('customer account', () => {
     request('/api/public/customer/profile').flush(profile);
     harness.detectChanges();
     expect(text()).toContain('Dados pessoais');
-    expect(harness.routeNativeElement!.querySelector('nav[aria-label="Menu da conta"] a[href="/conta/pagamentos"]')).toBeNull();
-    expect(harness.routeNativeElement!.querySelector('details a[href="/conta/pagamentos"]')!.textContent).toContain('Em breve');
+    expect(harness.routeNativeElement!.querySelector('nav[aria-label="Menu da conta"] a[href="/conta/pagamentos"]')?.textContent).toContain('Meios de pagamento');
+    expect(harness.routeNativeElement!.querySelector('.sidebar a[href="/favoritos"]')).toBeNull();
     fill('#profile-name', 'Ana Silva');
     fill('#profile-phone', '123');
     submit();
@@ -178,6 +178,7 @@ describe('customer account', () => {
   it('shows unavailable features without collecting payment or credential data', async () => {
     signIn();
     await harness.navigateByUrl('/conta/pagamentos', CustomerAccountComponent);
+    expect(text()).toContain('Pix de teste');
     expect(text()).toContain('não está disponível');
     expect(harness.routeNativeElement!.querySelector('input')).toBeNull();
     await harness.navigateByUrl('/conta/seguranca', CustomerAccountComponent);
@@ -187,18 +188,30 @@ describe('customer account', () => {
   });
   it('reuses the panel and sidebar when switching tabs without replacing content with a full skeleton', async () => {
     signIn();
-    const first = await harness.navigateByUrl('/conta/perfil', CustomerAccountComponent);
+    await harness.navigateByUrl('/conta/perfil', CustomerAccountComponent);
     request('/api/public/customer/profile').flush(profile); harness.detectChanges();
     const panel = harness.routeNativeElement!.querySelector('.panel')!;
     const sidebar = harness.routeNativeElement!.querySelector('.sidebar');
-    const second = await harness.navigateByUrl('/conta/enderecos', CustomerAccountComponent);
+    const router = TestBed.inject(Router);
+    const destination = router.createUrlTree(['/conta/enderecos']);
+    const link = sidebar!.querySelector<HTMLAnchorElement>('a[href="/conta/enderecos"]')!;
+    let behavior: string | undefined;
+    const navigation = router.events.subscribe(() => {
+      if (router.currentNavigation()?.initialUrl.toString() === destination.toString()) {
+        behavior = router.currentNavigation()?.extras.scroll;
+      }
+    });
+    link.click();
+    await harness.fixture.whenStable();
+    navigation.unsubscribe();
     harness.detectChanges();
-    expect(second).toBe(first);
+    expect(router.url).toBe('/conta/enderecos');
+    expect(behavior).toBe('manual');
     expect(harness.routeNativeElement!.querySelector('.panel')).toBe(panel);
     expect(harness.routeNativeElement!.querySelector('.sidebar')).toBe(sidebar);
     expect(panel.getAttribute('aria-busy')).toBe('true');
     expect(panel.querySelector('h2')!.textContent).toBe('Meus endereços');
-    expect(panel.querySelector('.loading')).toBeNull();
+    expect(panel.querySelector('.panel-progress')).toBeNull();
     expect(panel.textContent).not.toContain('Nenhum endereço cadastrado');
     request('/api/public/customer/addresses').flush([address]); harness.detectChanges();
     expect(panel.getAttribute('aria-busy')).toBe('false');

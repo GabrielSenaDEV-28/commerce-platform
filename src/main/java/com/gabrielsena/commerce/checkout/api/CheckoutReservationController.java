@@ -9,9 +9,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -27,10 +29,13 @@ public class CheckoutReservationController {
 
     @PostMapping
     public ResponseEntity<Checkout> start(HttpServletRequest request,
-            @RequestHeader(value = "Cart-Token", required = false) String token) {
+            @RequestHeader(value = "Cart-Token", required = false) String token,
+            @RequestBody(required = false) Selection selection) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
-                .body(checkout.start(stores.resolve(request.getServerName()), token));
+                .body(checkout.start(stores.resolve(request.getServerName()), token, selection == null ? null : selection.variantIds()));
     }
+
+    public record Selection(List<UUID> variantIds) { }
 
     @GetMapping
     public ResponseEntity<Checkout> get(HttpServletRequest request,
