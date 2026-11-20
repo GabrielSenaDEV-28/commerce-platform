@@ -44,6 +44,7 @@ import { UI } from './ui';
             }
             @case ('merchant') {
               <a routerLink="/painel/perfil">Perfil e loja</a>
+              <a routerLink="/painel/entrega">Entrega e retirada</a>
               <a routerLink="/painel/categorias">Categorias</a>
               <a routerLink="/painel/produtos">Produtos</a>
               <a routerLink="/painel/pedidos">Pedidos</a>

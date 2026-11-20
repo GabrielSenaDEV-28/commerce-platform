@@ -84,6 +84,130 @@ stack does not simulate or configure them. Their existing environment settings
 and valid credentials are required to enable uploads and shipping integration.
 Do not commit credentials or add them to Docker build arguments.
 
+## Optional local HTTPS for Melhor Envio
+
+This mode adds a loopback-only TLS reverse proxy, not a public tunnel. It does
+not upload the application to a third party or require buying a domain. It also
+does not guarantee that the provider's application form accepts a localhost
+callback. Check that before completing registration; never substitute a fake
+public URL. OAuth redirects are followed by your browser, so the browser must
+be on this Mac.
+
+Generate certificates from the repository root using **OpenSSL 3**:
+
+```bash
+sh docker/local-https-certificates.sh <store-subdomain>.localhost
+```
+
+On macOS, if `openssl version` reports LibreSSL, use an installed OpenSSL 3
+on your PATH first. The script retains existing valid certificates and fails
+explicitly for incomplete or expiring files. Certificates last one year.
+Replace `<store-subdomain>` with your store label (for example,
+`sh docker/local-https-certificates.sh palollita.localhost`). You may pass several
+store hostnames. Exact names are needed: TLS clients may reject `*.localhost`
+wildcards. Rerunning with new names reissues the server certificate using the
+same CA; include every desired store name and restart `https` afterward.
+The local CA, private keys and generated files stay in ignored `.local/https`.
+Never commit or share the private keys. Only the server certificate and key
+are mounted into the TLS container, not the CA private key.
+
+Trust the CA on **your own development Mac only**. In Keychain Access, select
+your login keychain, import `.local/https/ca.crt`, open **Commerce Platform Local
+Development CA**, and under **Trust**, set **When using this certificate** to
+**Always Trust**. macOS may ask for your password. This changes browser trust;
+the setup script does not change it automatically. Never bypass browser
+certificate warnings or trust a CA received from somebody else. Remove this
+CA from Keychain Access when you no longer need this development setup.
+
+Start the HTTPS stack:
+
+```bash
+docker compose -f compose.yaml -f compose.https.yaml up -d --wait
+docker compose -f compose.yaml -f compose.https.yaml watch --no-up
+```
+
+Stop an existing Compose Watch first, so it does not recreate services using
+the HTTP-only configuration. Include **both files** in subsequent Compose
+commands while using HTTPS. The extra proxy listens only on `127.0.0.1:4443`.
+Use `https://localhost:4443` for the platform and
+`https://<store-subdomain>.localhost:4443` for the storefront. If the subdomain
+does not resolve to loopback, add an entry in your hosts file.
+
+Use HTTPS throughout this mode, including login: session cookies become Secure.
+The original HTTP ports remain reachable for diagnostics, but HTTP session
+mutations are not supported while this override is active. The proxy preserves
+the host/port, overwrites forwarded headers, supports Angular's WebSocket
+reload, and resolves Docker service names again after Watch replaces containers.
+Forwarded-header processing is enabled only by this local override; do not
+copy this development networking setup into production.
+
+Verify TLS without disabling certificate validation:
+
+```bash
+curl --cacert .local/https/ca.crt https://localhost:4443/
+```
+
+For Melhor Envio, choose the host where the merchant will start the connection.
+If that is the platform host, the application form values are:
+
+| Field | Local value |
+|---|---|
+| Platform website | `https://localhost:4443` |
+| Test environment | `https://localhost:4443` |
+| Redirect/callback URL | `https://localhost:4443/api/public/integrations/melhor-envio/callback` |
+
+If connecting from a store host instead, replace `localhost` with the exact
+`<store-subdomain>.localhost` in **all three values**. The host initiating OAuth
+must match the callback host; use the exact same callback in the provider and
+in the backend configuration, including `:4443`. If the provider rejects local
+URLs, stop here: this local-only setup cannot satisfy a public-URL requirement.
+
+The override forwards these optional root `.env` values to the backend:
+
+```dotenv
+MELHOR_ENVIO_CLIENT_ID=replace-with-sandbox-client-id
+MELHOR_ENVIO_CLIENT_SECRET=replace-with-sandbox-client-secret
+MELHOR_ENVIO_REDIRECT_URI=https://localhost:4443/api/public/integrations/melhor-envio/callback
+MELHOR_ENVIO_USER_AGENT="CommercePlatform Sandbox (your-contact-email)"
+MELHOR_ENVIO_ENCRYPTION_KEY=replace-with-base64-key
+```
+
+Generate the encryption key once with `openssl rand -base64 32`, store it
+safely, and keep it stable across restarts. It encrypts the stored OAuth tokens;
+changing it makes existing credentials unreadable. Keep existing Pix variables
+when editing `.env`. Never paste secrets into the frontend, Git, screenshots,
+or chat. After changing `.env`, rerun the `up -d --wait` command with both files.
+Do not print resolved Compose configuration to share it: it can contain secrets.
+
+After registering the sandbox application and setting the variables, sign into
+the **store host** as a merchant and open **Entrega e retirada** at
+`/painel/entrega`. Register the full shipping origin; optionally enable pickup
+and add customer-facing instructions. Save before starting authorization so
+the form is not lost during the external redirect.
+
+Click **Conectar ao Melhor Envio**, sign into the sandbox account, and authorize
+the `shipping-calculate` permission. The browser returns to the delivery panel,
+which retrieves the actual connection status (the URL message alone is not proof
+of a connection). The callback must use this same store host, for example
+`https://palollita.localhost:4443/api/public/integrations/melhor-envio/callback`.
+Since the panel requires the store host, use the store-host form values above
+rather than the platform-host example when configuring this UI.
+
+No personal token needs to be copied: the backend obtains and encrypts access
+and refresh tokens through OAuth. Status lookup does not expose credentials.
+Disconnecting deletes this platform's stored connection, not the provider
+account; access can also be revoked through Melhor Envio itself. This sandbox
+integration only quotes freight; it does not purchase freight or print labels.
+Provider authorization and real sandbox quotes still require manual validation
+with your account.
+
+To return to HTTP development without deleting data:
+
+```bash
+docker compose -f compose.yaml -f compose.https.yaml stop https
+docker compose up -d --wait
+```
+
 ## Mercado Pago Pix sandbox
 
 Pix is off by default. For the first local test, you only need a Mercado Pago

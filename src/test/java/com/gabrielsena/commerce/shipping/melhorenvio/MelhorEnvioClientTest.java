@@ -46,7 +46,7 @@ class MelhorEnvioClientTest {
     }
 
     @Test
-    void sendsUnitDataAndReturnsOnlyCorreiosCustomizedQuotes() {
+    void sendsUnitDataAndReturnsAllCarriersCustomizedQuotes() {
         server.expect(once(), requestTo("https://sandbox.melhorenvio.com.br/api/v2/me/shipment/calculate"))
                 .andExpect(method(HttpMethod.POST)).andExpect(header("Authorization", "Bearer test-token"))
                 .andExpect(header("User-Agent", "Commerce (support@example.test)"))
@@ -67,9 +67,11 @@ class MelhorEnvioClientTest {
                         ]
                         """, MediaType.APPLICATION_JSON));
         var result = client.quote("test-token", request());
-        assertEquals(1, result.quotes().size());
+        assertEquals(2, result.quotes().size());
         assertEquals(new BigDecimal("32.50"), result.quotes().getFirst().price());
         assertEquals(9, result.quotes().getFirst().deliveryDays());
+        assertEquals(3, result.quotes().get(1).id());
+        assertEquals(new BigDecimal("10.00"), result.quotes().get(1).price());
         assertEquals(2, result.unavailable().getFirst().id());
         server.verify();
     }

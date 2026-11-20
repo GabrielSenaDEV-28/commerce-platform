@@ -2,7 +2,7 @@ import { UI } from '../ui/ui';
 import { CurrencyPipe, DatePipe, DOCUMENT, NgTemplateOutlet } from '@angular/common';
 import { MobileMenuComponent } from '../ui/mobile-menu.component';
 import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
-import { Component, DestroyRef, inject, signal } from '@angular/core';
+import { Component, DestroyRef, inject, signal, viewChild } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink, RouterLinkActive } from '@angular/router';
@@ -13,6 +13,7 @@ import { confirmDiscard, watchUnsavedChanges } from '../unsaved-changes';
 import { applyServerFieldErrors } from '../ui/validation';
 import { CopyLinkComponent } from '../ui/copy-link.component';
 import { KeepScrollDirective } from '../ui/keep-scroll.directive';
+import { DeliverySettingsComponent } from './delivery-settings.component';
 
 interface Page<T> { content: T[]; page: number; totalPages: number; totalElements: number }
 interface TypeItem { id: string; name: string; hasColor: boolean; hasSize: boolean; sizeFormat: 'LETTER' | 'NUMERIC' | null; active: boolean }
@@ -22,7 +23,7 @@ interface StoreInfo { name: string; subdomain: string }
 
 @Component({
   selector: 'app-merchant-admin',
-  imports: [...UI, ReactiveFormsModule, RouterLink, RouterLinkActive, CurrencyPipe, DatePipe, VariantOptionsComponent, CopyLinkComponent, NgTemplateOutlet, MobileMenuComponent, KeepScrollDirective],
+  imports: [...UI, ReactiveFormsModule, RouterLink, RouterLinkActive, CurrencyPipe, DatePipe, VariantOptionsComponent, CopyLinkComponent, NgTemplateOutlet, MobileMenuComponent, KeepScrollDirective, DeliverySettingsComponent],
   templateUrl: './merchant-admin.component.html',
   styleUrl: './merchant-admin.component.css',
 })
@@ -35,6 +36,7 @@ export class MerchantAdminComponent {
   private readonly destroy = inject(DestroyRef);
   private readonly forms = inject(FormBuilder);
   private listRequest?: Subscription;
+  private readonly delivery = viewChild(DeliverySettingsComponent);
   protected readonly section = signal('');
   protected readonly store = signal<StoreInfo | null>(null);
   protected readonly sameStore = signal(false);
@@ -104,8 +106,8 @@ export class MerchantAdminComponent {
     });
   }
 
-  hasUnsavedChanges(): boolean { return this.formOpen() && (this.section() === 'categorias' ? this.itemForm.dirty : this.productForm.dirty); }
-  isSaving(): boolean { return this.busy(); }
+  hasUnsavedChanges(): boolean { return !!this.delivery()?.hasUnsavedChanges() || (this.formOpen() && (this.section() === 'categorias' ? this.itemForm.dirty : this.productForm.dirty)); }
+  isSaving(): boolean { return this.busy() || !!this.delivery()?.isSaving(); }
   protected closeForm(): void {
     if (!this.hasUnsavedChanges() || confirmDiscard(this.document.defaultView)) {
       this.formOpen.set(false);
@@ -230,7 +232,7 @@ export class MerchantAdminComponent {
     });
   }
   protected logout(menu?: MobileMenuComponent): void {
-    if (this.busy()) return;
+    if (this.isSaving()) return;
     if (this.hasUnsavedChanges() && !confirmDiscard(this.document.defaultView)) return;
     this.busy.set(true);
     this.auth.logout().pipe(takeUntilDestroyed(this.destroy)).subscribe({

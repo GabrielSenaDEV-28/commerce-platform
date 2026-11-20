@@ -40,6 +40,7 @@ export class CheckoutPageComponent {
     return (this.checkout.cart.cart()?.items ?? []).filter((item) => !selection.length || selection.includes(item.variantId));
   });
   protected readonly quote = signal<CheckoutQuote | null>(null);
+  protected readonly quoting = signal(false);
   protected readonly serviceId = signal<number | null>(null);
   protected readonly partial = signal(false);
   protected readonly submitted = signal(false);
@@ -51,7 +52,7 @@ export class CheckoutPageComponent {
   });
   protected readonly partialRequired = computed(() => this.checkout.reservation()?.items.some((item) => !item.reserved) ?? false);
   protected readonly selectedAddress = computed(() => this.addresses().find((address) => address.id === this.addressId()));
-  protected readonly selectedService = computed(() => this.quote()?.quotes.find((service) => service.id === this.serviceId()));
+  protected readonly selectedService = computed(() => this.quoteValid() ? this.quote()?.quotes.find((service) => service.id === this.serviceId()) : undefined);
   protected readonly subtotal = computed(() => this.checkout.reservation()?.items.reduce((sum, item) => sum + (item.reserved ? item.price * item.quantity : 0), 0) ?? 0);
   protected readonly total = computed(() => this.subtotal() + (this.fulfillment() === 'DELIVERY' ? this.selectedService()?.price ?? 0 : 0));
   protected readonly quoteValid = computed(() => !!this.quote() && Date.parse(this.quote()!.expiresAt) > this.now());
@@ -72,7 +73,7 @@ export class CheckoutPageComponent {
     if (this.isSaving()) return;
     this.loading.set(true); this.error.set(''); this.profile.set(null); this.resetSelection();
     forkJoin({ profile: this.checkout.profile(), addresses: this.checkout.addresses(), pickup: this.checkout.pickup(), cart: this.checkout.cart.load() })
-      .pipe(finalize(() => this.loading.set(false)), takeUntilDestroyed(this.destroy)).subscribe({
+      .pipe(finalize(() => { this.loading.set(false); if (this.profile()) this.scheduleQuote(); }), takeUntilDestroyed(this.destroy)).subscribe({
         next: ({ profile, addresses, pickup, cart }) => {
           this.profile.set(profile); this.addresses.set(addresses); this.pickup.set(pickup);
           const preferred = this.route.snapshot.queryParamMap.get('address') ?? this.addressId();
@@ -94,10 +95,11 @@ export class CheckoutPageComponent {
         queueMicrotask(() => { if (!this.destroy.destroyed) this.restoreReservation(); });
       }
       return throwError(() => error);
-    })));
+    })), () => this.scheduleQuote());
   }
   private restoreReservation(): void {
     this.checkout.refresh().pipe(takeUntilDestroyed(this.destroy)).subscribe({
+      next: () => this.scheduleQuote(),
       error: (error: unknown) => {
         if (!(error instanceof HttpErrorResponse) || error.status !== 404) this.error.set(checkoutError(error));
       },
@@ -107,6 +109,7 @@ export class CheckoutPageComponent {
     const ids = this.checkout.reservation()?.items.map((item) => item.variantId) ?? [];
     this.variantIds.set(ids);
     this.error.set('');
+    this.scheduleQuote();
     void this.router.navigate([], { relativeTo: this.route, queryParamsHandling: 'merge', queryParams: { item: ids }, replaceUrl: true });
   }
   protected nextOrder(): void {
@@ -118,7 +121,7 @@ export class CheckoutPageComponent {
   protected refreshReservation(): void {
     if (this.isSaving() || this.checkout.pending()) return;
     this.resetSelection(); this.cancelRequested.set(false);
-    this.run(this.checkout.refresh());
+    this.run(this.checkout.refresh(), () => this.scheduleQuote());
   }
   protected cancel(): void {
     if (this.isSaving() || this.checkout.pending()) return;
@@ -129,19 +132,29 @@ export class CheckoutPageComponent {
   }
   protected chooseFulfillment(value: 'DELIVERY' | 'PICKUP'): void {
     this.fulfillment.set(value); this.resetSelection();
+    if (value === 'DELIVERY') this.calculate();
   }
   protected chooseAddress(event: Event): void {
-    if (event.target instanceof HTMLSelectElement) { this.addressId.set(event.target.value); this.resetSelection(); }
+    if (event.target instanceof HTMLSelectElement) {
+      this.addressId.set(event.target.value); this.resetSelection(); this.calculate();
+    }
   }
   protected confirmPartial(event: Event): void {
     if (event.target instanceof HTMLInputElement) this.partial.set(event.target.checked);
   }
   private resetSelection(): void { this.quote.set(null); this.serviceId.set(null); }
+  private scheduleQuote(): void {
+    if (!this.selectedAddress() || !this.active() || this.fulfillment() !== 'DELIVERY') return;
+    queueMicrotask(() => {
+      if (!this.destroy.destroyed && !this.quote() && this.fulfillment() === 'DELIVERY' && !this.checkout.order()) this.calculate();
+    });
+  }
   protected calculate(): void {
     const address = this.selectedAddress();
-    if (this.isSaving() || !this.active() || this.reservationConflict() || !address || this.checkout.pending()) return;
+    if (this.isSaving() || this.fulfillment() !== 'DELIVERY' || !this.active() || this.reservationConflict() || !address || this.checkout.pending()) return;
     this.resetSelection();
-    this.run(this.checkout.quote(address.postalCode), (quote) => this.quote.set(quote));
+    this.quoting.set(true);
+    this.run(this.checkout.quote(address.postalCode).pipe(finalize(() => this.quoting.set(false))), (quote) => this.quote.set(quote));
   }
   protected submit(): void {
     if (this.isSaving()) return;

@@ -156,13 +156,13 @@ describe('merchant administration', () => {
     fixture.detectChanges();
     expect(fixture.nativeElement.textContent).toContain('ainda não estão disponíveis');
   });
-  it('shows only store and shared login links in the profile', () => {
+  it('shows store, shared login and delivery configuration links in the profile', () => {
     params.next(convertToParamMap({ section: 'perfil' }));
     const { fixture, store } = setup();
     store.flush({ name: 'Loja', subdomain: 'loja' }); fixture.detectChanges();
     const links = fixture.nativeElement.querySelectorAll('.panel a') as NodeListOf<HTMLAnchorElement>;
-    expect(links.length).toBe(2);
-    expect([...links].map((link) => link.getAttribute('href'))).toEqual(['/', '/entrar']);
+    expect(links.length).toBe(3);
+    expect([...links].map((link) => link.getAttribute('href'))).toEqual(['/', '/entrar', '/painel/entrega']);
     expect(fixture.nativeElement.querySelector('.panel').textContent).not.toContain('Link de administração');
     expect(fixture.nativeElement.querySelectorAll('app-copy-link').length).toBe(2);
     expect(fixture.nativeElement.querySelector('nav[aria-label="Administração"] a[href="/painel/promocoes"]')).toBeNull();

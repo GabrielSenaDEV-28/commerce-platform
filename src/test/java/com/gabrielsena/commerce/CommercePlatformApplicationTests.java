@@ -1084,7 +1084,8 @@ class CommercePlatformApplicationTests {
 		mockMvc.perform(get("/api/integrations/melhor-envio").header("Authorization", "Bearer " + actor.token()))
 				.andExpect(status().isOk()).andExpect(jsonPath("$.status").value("PENDING"));
 		mockMvc.perform(get("/api/public/integrations/melhor-envio/callback").param("state", "invalid").param("code", "code"))
-				.andExpect(status().isBadRequest())
+				.andExpect(status().isSeeOther())
+				.andExpect(r -> assertEquals("/painel/entrega?melhorEnvio=failed", r.getResponse().getHeader("Location")))
 				.andExpect(r -> assertEquals("no-referrer", r.getResponse().getHeader("Referrer-Policy")))
 				.andExpect(r -> assertEquals("no-store", r.getResponse().getHeader("Cache-Control")));
 		mockMvc.perform(delete("/api/integrations/melhor-envio").header("Authorization", "Bearer " + actor.token()))

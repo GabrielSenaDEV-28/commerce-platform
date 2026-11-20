@@ -10,7 +10,7 @@
       </div>
     }
         <ng-template #adminMenu><p>{{ store()?.name }}</p><nav aria-label="Administração">
-          @for (link of [{id:'perfil',name:'Perfil e loja'}, {id:'categorias',name:'Categorias'}, {id:'produtos',name:'Produtos'}, {id:'pedidos',name:'Pedidos'}]; track link.id) {
+          @for (link of [{id:'perfil',name:'Perfil e loja'}, {id:'categorias',name:'Categorias'}, {id:'produtos',name:'Produtos'}, {id:'pedidos',name:'Pedidos'}, {id:'entrega',name:'Entrega e retirada'}]; track link.id) {
             @if (busy()) { <span class="disabled-link">{{ link.name }}</span> }
             @else { <a appKeepScroll [routerLink]="['/painel', link.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ link.name }} <span>›</span></a> }
           }
@@ -37,7 +37,10 @@
             <p><strong>Link de login:</strong> <a routerLink="/entrar">{{ storeUrl() }}entrar</a></p>
             <app-copy-link path="/entrar" label="Copiar link de login" />
             <p>O login é o mesmo: sua conta libera a administração; clientes acessam somente a área deles.</p>
-            <p>Alterações do perfil e do endereço da loja ainda não estão disponíveis.</p>
+            <p>Configure a origem dos envios e o endereço de retirada em <a appKeepScroll routerLink="/painel/entrega">Entrega e retirada</a>.</p>
+            <p>Alterações do nome e do subdomínio ainda não estão disponíveis.</p>
+          } @else if (section() === 'entrega') {
+            <app-delivery-settings />
           } @else if (section() === 'categorias') {
             <div class="title"><div><span class="overline">CATÁLOGO</span><h2>Categorias e tipos</h2><p>Defina os atributos usados nas variantes dos produtos.</p></div><button class="primary" type="button" (click)="openItem()" [disabled]="busy()">+ Cadastrar</button></div>
             @if (formOpen()) {

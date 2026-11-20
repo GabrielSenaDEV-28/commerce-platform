@@ -98,7 +98,12 @@ describe('checkout access and navigation', () => {
     http.expectOne('/api/public/cart/customer').flush({ token: 'customer-cart', cart: { items: [{ productId: 'p1', variantId: 'v1', name: 'Camisa', quantity: 1, price: 20, available: true }] } });
     await harness.fixture.whenStable();
     http.expectOne(req => req.method === 'GET' && req.url === '/api/public/checkout').flush({ status: 'ACTIVE', id: 'r1', expiresAt: '2099-01-01T00:00:00Z', items: [{ productId: 'p1', variantId: 'v1', quantity: 1, price: 20, reserved: true }] });
+    await harness.fixture.whenStable();
+    const shipping = http.expectOne('/api/public/checkout/r1/shipping-estimates');
+    expect(shipping.request.body).toEqual({ postalCode: '01001000' });
+    shipping.flush({ quoteId: 'q1', reservationId: 'r1', expiresAt: '2099-01-01T00:00:00Z', quotes: [{ id: 1, name: 'PAC', price: 10, deliveryDays: 4 }], unavailable: [] });
     harness.detectChanges();
     expect(harness.routeNativeElement!.querySelector<HTMLSelectElement>('#checkout-address')?.value).toBe('a1');
+    expect(harness.routeNativeElement!.textContent).toContain('PAC');
   });
 });

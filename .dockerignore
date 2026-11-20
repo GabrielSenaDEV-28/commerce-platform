@@ -1,6 +1,7 @@
 .git
 .idea
 .copilot
+.local
 .env
 .env.*
 !.env.example

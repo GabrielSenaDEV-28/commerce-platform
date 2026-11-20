@@ -24,7 +24,7 @@ export const routes: Routes = [
     canActivate: [requireAccount('merchant')], canDeactivate: [leaveEditablePage] },
   { path: 'painel/categorias/:id', loadComponent: () => import('./merchant-admin/category-details.component').then((m) => m.CategoryDetailsComponent), data: { reloadOnParamChange: true }, canActivate: [requireAccount('merchant')] },
   { path: 'painel/:section', loadComponent: () => import('./merchant-admin/merchant-admin.component').then((m) => m.MerchantAdminComponent),
-    canMatch: [(_route, segments) => ['perfil', 'categorias', 'produtos', 'pedidos', 'promocoes', 'vendas', 'funcionarios', 'personalizacao'].includes(segments[1]?.path)],
+    canMatch: [(_route, segments) => ['perfil', 'categorias', 'produtos', 'pedidos', 'entrega', 'promocoes', 'vendas', 'funcionarios', 'personalizacao'].includes(segments[1]?.path)],
     canActivate: [requireAccount('merchant')], canDeactivate: [leaveEditablePage] },
   { path: 'entrar', component: LoginComponent,
     canActivate: [() => !inject(AuthService).accountKind() || inject(Router).parseUrl('/')] },

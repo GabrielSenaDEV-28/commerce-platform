@@ -11,11 +11,13 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Duration;
+import java.net.URI;
 import java.util.Map;
 
 import static com.gabrielsena.commerce.api.ApiRequestSupport.actor;
@@ -60,17 +62,26 @@ public class MelhorEnvioOAuthController {
         try {
             service.complete(state, browser, code, error);
         } catch (IllegalArgumentException exception) {
-            return callbackResponse(HttpStatus.BAD_REQUEST, "Invalid authorization response.");
+            return callbackResponse("failed");
         } catch (MelhorEnvioException exception) {
-            return callbackResponse(HttpStatus.BAD_GATEWAY, "Authorization could not be completed.");
+            return callbackResponse("failed");
         }
-        return callbackResponse(HttpStatus.OK, "Authorization completed.");
+        return callbackResponse("connected");
     }
 
-    private static ResponseEntity<String> callbackResponse(HttpStatus status, String body) {
-        return ResponseEntity.status(status).cacheControl(CacheControl.noStore())
+    @ExceptionHandler(MelhorEnvioException.class)
+    public ResponseEntity<Map<String, String>> integrationError(MelhorEnvioException exception) {
+        boolean configuration = exception.reason() == MelhorEnvioException.Reason.CONFIGURATION;
+        return ResponseEntity.status(configuration ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.BAD_GATEWAY)
+                .cacheControl(CacheControl.noStore())
+                .body(Map.of("code", configuration ? "MELHOR_ENVIO_CONFIGURATION" : "MELHOR_ENVIO_UNAVAILABLE"));
+    }
+
+    private static ResponseEntity<String> callbackResponse(String result) {
+        return ResponseEntity.status(HttpStatus.SEE_OTHER).cacheControl(CacheControl.noStore())
+                .location(URI.create("/painel/entrega?melhorEnvio=" + result))
                 .header("Referrer-Policy", "no-referrer")
-                .header(HttpHeaders.SET_COOKIE, cookie("", Duration.ZERO)).body(body);
+                .header(HttpHeaders.SET_COOKIE, cookie("", Duration.ZERO)).build();
     }
 
     private static String cookie(String value, Duration age) {

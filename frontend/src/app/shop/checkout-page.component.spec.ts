@@ -25,7 +25,7 @@ describe('checkout review', () => {
     http.expectOne('/api/public/store-auth/session/login').flush({ accountKind: 'customer', identity: 'customer-id', accessToken: 'access', refreshToken: 'r', expiresIn: 900 });
   });
   afterEach(() => { http.verify(); vi.restoreAllMocks(); vi.useRealTimers(); });
-  function setup(options: { phone?: string | null; pickup?: boolean; empty?: boolean } = {}) {
+  function setup(options: { phone?: string | null; pickup?: boolean; empty?: boolean; singleAddress?: boolean } = {}) {
     if (!options.empty) {
       TestBed.inject(CartService).add('p1', 'v1', 2).subscribe();
       http.expectOne('/api/public/cart/customer').flush({ token: 'opaque', cart: { items: [] } });
@@ -34,7 +34,7 @@ describe('checkout review', () => {
     }
     const fixture = TestBed.createComponent(CheckoutPageComponent);
     http.expectOne('/api/public/customer/profile').flush({ name: 'Cliente', email: 'customer@example.com', phone: options.phone === undefined ? '11987654321' : options.phone });
-    http.expectOne('/api/public/customer/addresses').flush([address, { ...address, id: 'a2', postalCode: '20010000' }]);
+    http.expectOne('/api/public/customer/addresses').flush(options.singleAddress ? [address] : [address, { ...address, id: 'a2', postalCode: '20010000' }]);
     http.expectOne('/api/public/pickup').flush({ available: options.pickup ?? false, address: options.pickup ? address : null, instructions: 'Aguarde a loja.' });
     if (!options.empty) http.expectOne('/api/public/cart').flush(cart);
     else http.expectOne('/api/public/cart/customer').flush({ token: 'opaque', cart: { items: [] } });
@@ -54,7 +54,6 @@ describe('checkout review', () => {
   }
   function shipping(fixture: ReturnType<typeof setup>) {
     selectAddress(fixture);
-    button(fixture, 'Consultar opções').click();
     http.expectOne('/api/public/checkout/r1/shipping-estimates').flush(quote); fixture.detectChanges();
     fixture.nativeElement.querySelector('input[name="shipping"]').click(); fixture.detectChanges();
   }
@@ -103,10 +102,47 @@ describe('checkout review', () => {
     expect(create.request.body).toEqual({ acceptPartial: true, fulfillmentType: 'PICKUP', addressId: null, quoteId: null, shippingServiceId: null });
     create.flush({}, { status: 409, statusText: 'Conflict' });
   });
+  it('automatically displays every available shipping service and adds only the selected price', () => {
+    const fixture = setup({ pickup: true }); start(fixture); selectAddress(fixture);
+    expect(fixture.nativeElement.textContent).toContain('Consultando preços e prazos');
+    const request = http.expectOne('/api/public/checkout/r1/shipping-estimates');
+    expect(request.request.body).toEqual({ postalCode: address.postalCode });
+    request.flush({ ...quote, quotes: [
+      ...quote.quotes, { id: 2, name: 'SEDEX', price: 21.35, deliveryDays: 2 },
+      { id: 3, name: 'Jadlog', price: 15.5, deliveryDays: 3 },
+    ] }); fixture.detectChanges();
+    const choices = fixture.nativeElement.querySelectorAll('input[name="shipping"]') as NodeListOf<HTMLInputElement>;
+    expect(choices.length).toBe(3);
+    expect(fixture.nativeElement.textContent).toContain('SEDEX');
+    expect(fixture.nativeElement.textContent).toContain('Jadlog');
+    expect(fixture.nativeElement.querySelector('.total').textContent).toContain('72,00');
+    choices[0].click(); fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.total').textContent).toContain('82,00');
+    choices[1].click(); fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.total').textContent).toContain('93,35');
+    choices[2].click(); fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.total').textContent).toContain('87,50');
+    const pickup = fixture.nativeElement.querySelectorAll('input[name="fulfillment"]')[1] as HTMLInputElement;
+    pickup.click(); fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.total').textContent).toContain('72,00');
+    expect(fixture.nativeElement.querySelector('input[name="shipping"]')).toBeNull();
+  });
+  it('automatically quotes after explicitly reserving with a preselected address', async () => {
+    const fixture = setup({ singleAddress: true });
+    http.expectNone('/api/public/checkout');
+    start(fixture);
+    await fixture.whenStable();
+    http.expectOne('/api/public/checkout/r1/shipping-estimates').flush(quote);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('PAC');
+  });
   it('invalidates shipping on address changes and demands a new selection after a changed quote', () => {
     const fixture = setup(); start(fixture); shipping(fixture);
     selectAddress(fixture, 'a2');
     expect(fixture.nativeElement.querySelector('input[name="shipping"]')).toBeNull();
+    const changed = http.expectOne('/api/public/checkout/r1/shipping-estimates');
+    expect(changed.request.body).toEqual({ postalCode: '20010000' });
+    changed.flush(quote);
     shipping(fixture);
     button(fixture, 'Criar pedido pendente').click();
     http.expectOne('/api/public/checkout/r1/orders').flush({ code: 'SHIPPING_QUOTE_CHANGED', quote: { ...quote, quoteId: 'q2' } }, { status: 409, statusText: 'Conflict' });
@@ -185,7 +221,10 @@ describe('checkout review', () => {
     button(fixture, 'Consultar opções').click();
     http.expectOne('/api/public/checkout/r1/shipping-estimates').flush({ ...quote, expiresAt: '2026-01-01T10:00:02Z' }); fixture.detectChanges();
     fixture.nativeElement.querySelector('input[name="shipping"]').click(); fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.total').textContent).toContain('82,00');
     vi.advanceTimersByTime(2000); fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.total').textContent).toContain('72,00');
+    expect(fixture.nativeElement.querySelector('input[name="shipping"]').closest('fieldset').disabled).toBe(true);
     button(fixture, 'Criar pedido pendente').click(); fixture.detectChanges();
     http.expectNone('/api/public/checkout/r1/orders');
     expect(fixture.nativeElement.textContent).toContain('A cotação expirou');
