@@ -630,14 +630,16 @@ Pickup is free and uses the same address as the shipping origin.
 The internal Melhor Envio quotation client is prepared for sandbox only.
 It sends origin and destination postal codes and unit product data, rounding
 each dimension up to whole centimeters without changing the catalog. It uses
-the provider's customized price and delivery time and retains Correios
-services. Provider failures and individual unavailable services are distinct.
-**Pending sandbox validation:** Create a sandbox account and application,
-configure the callback and credentials securely, and validate the OAuth
-authorization, token renewal and quotation against the real sandbox. This
-work is deferred until after this initial implementation is merged. The
-quotation endpoints use the stored merchant authorization, but an end-to-end
-quotation flow still needs real sandbox validation.
+the provider's customized price and delivery time and retains all available
+carrier services returned by the sandbox, rather than filtering to Correios.
+PAC and SEDEX appear only when returned as available for the origin,
+destination and packages. Provider failures and individual unavailable services
+are distinct.
+**Sandbox validation progress:** The merchant reported completing sandbox
+application registration, origin configuration, OAuth connection and creation
+of a pending customer order. Token renewal, all carrier combinations and
+production readiness remain pending validation. The quotation endpoints use
+the stored merchant authorization.
 Simulated provider responses do not establish sandbox compatibility; do not
 enable this integration for production before validating it and addressing
 any provider-specific requirements.
@@ -692,7 +694,7 @@ quantity must be a positive integer. No customer authentication is required.
 
 The server obtains origin, current prices, dimensions, quantities and the
 store's authorization itself. A successful response contains `quotes` and
-`unavailable` arrays of Correios services. Each quote contains `id`, `name`,
+`unavailable` arrays of carrier services returned by Melhor Envio. Each quote contains `id`, `name`,
 `price` in BRL and `deliveryDays`; unavailable entries contain `id` and `name`.
 Responses are `Cache-Control: no-store`. These are estimates, not guaranteed
 prices or stock reservations. Values, stock, cart contents and settings can
@@ -1234,3 +1236,59 @@ Potential future capabilities include:
 - Analytics and reporting.
 - Real-time customer experiences.
 - Live-commerce and acquisition-channel tracking.
+
+### Promotions and coupons — pending implementation
+
+**Status: not implemented; future work.** Checkout currently charges the full
+reserved-item subtotal plus the selected carrier's quoted shipping price.
+Pickup remains free when enabled. No product is currently treated as eligible
+for promotional free shipping, and no coupon input or artificial discount is
+shown.
+
+The future promotion module must support merchant-scoped eligibility for item
+discounts and shipping discounts/free shipping. Its design must define campaign
+dates, eligible products/variants, destination/service restrictions, minimum
+purchase amounts, coupon validity and usage limits, and whether discounts can
+be combined. These rules must be decided before implementation, not inferred
+from the displayed price or applied solely in the browser.
+
+The backend must authoritatively validate eligibility and calculate discounts
+for the selected/reserved items and selected delivery service. The summary must
+show item subtotal, carrier shipping price, item discount, shipping discount
+and payable total separately. A shipping promotion changes what the customer
+pays, not the carrier's quoted price; that original quote must remain recorded.
+Discounts must not produce negative totals.
+
+Any change to items, address, shipping service, campaign or coupon validity must
+revalidate eligibility and require confirmation if the payable amount changes.
+Order snapshots must retain the applied rules/coupon, original amounts and
+discounts, with atomic/idempotent usage-limit enforcement during order creation.
+Payment must use the final server-calculated order amount, never browser totals.
+Expired promotions and rejected coupons must have clear customer-facing errors.
+
+### Checkout delivery choices
+
+With an active reservation and a selected address, checkout automatically
+requests delivery options, including after returning from address registration
+or explicitly refreshing/starting a reservation. It shows every available
+service returned by Melhor Envio with its price and estimated delivery days;
+the customer explicitly chooses one. Failed requests are not silently retried
+and never fabricate a free delivery alternative. Manual consultation remains
+available for recovery or an expired quote.
+
+Changing address or fulfillment clears the quote and selected service. Changing
+the service updates the summary to item subtotal plus that service's shipping
+price, without accumulating previous selections. Expired quotes no longer
+contribute a selected freight amount and cannot be submitted. Order creation
+revalidates and snapshots shipping on the server; changed quotes require a new
+selection and confirmation.
+
+## Merchant delivery settings
+
+The merchant panel includes **Entrega e retirada** on the store host. Merchants
+can save their store's shipping origin and optional pickup instructions, and
+authorize or disconnect their own Melhor Envio sandbox account through OAuth.
+The panel shows the server-reported connection state and requires HTTPS for
+authorization. Client secrets and provider tokens are never entered into or
+returned to the frontend. Quotation requires the origin, the connection, and
+variant package measurements. Buying shipping labels is outside this scope.

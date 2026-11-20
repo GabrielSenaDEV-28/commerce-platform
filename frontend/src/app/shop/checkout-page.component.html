@@ -81,14 +81,19 @@
                 @if (!addresses().length) { <p>Você ainda não cadastrou um endereço.</p> }
                 <a routerLink="/conta/enderecos" [queryParams]="{ returnTo: 'checkout', item: variantIds(), novo: '1' }">Cadastrar outro endereço</a>
                 @if (selectedAddress(); as address) { <p>{{ address.recipient }} · {{ address.street }}, {{ address.number }} {{ address.complement }} · {{ address.district }} · {{ address.city }}/{{ address.state }} · CEP {{ address.postalCode }}</p> }
-                <div class="actions"><button type="button" [disabled]="!selectedAddress()" (click)="calculate()">Consultar opções de entrega</button></div>
+                <h3>Opções de entrega</h3>
+                @if (quoting()) { <p role="status" aria-live="polite">Consultando preços e prazos para este endereço...</p> }
+                @else if (!selectedAddress()) { <p class="muted">Selecione o endereço para consultar as opções disponíveis.</p> }
+                <div class="actions"><button type="button" [disabled]="!selectedAddress() || isSaving()" (click)="calculate()">Consultar opções de entrega novamente</button></div>
                 @if (quote(); as result) {
                   <p>Frete válido até {{ result.expiresAt | date:'HH:mm:ss' }}; valor e prazo serão conferidos novamente ao criar o pedido.</p>
-                  @for (service of result.quotes; track service.id) {
-                    <label class="shipping-choice"><input type="radio" name="shipping" [checked]="serviceId() === service.id" (change)="serviceId.set(service.id)" />
-                      <span>{{ service.name }} · {{ service.price | currency:'BRL':'symbol':'1.2-2':'pt-BR' }} · Prazo estimado: {{ service.deliveryDays }} dia(s)</span>
-                    </label>
-                  } @empty { <p>Nenhuma opção de entrega disponível para este endereço e estes itens.</p> }
+                  <fieldset [disabled]="!quoteValid()"><legend>Escolha o serviço de entrega</legend>
+                    @for (service of result.quotes; track service.id) {
+                      <label class="shipping-choice" [class.selected]="selectedService()?.id === service.id"><input type="radio" name="shipping" [checked]="selectedService()?.id === service.id" (change)="serviceId.set(service.id)" />
+                        <span><strong>{{ service.name }}</strong><span class="shipping-details">{{ service.price | currency:'BRL':'symbol':'1.2-2':'pt-BR' }} · Prazo estimado: {{ service.deliveryDays }} dia(s)</span></span>
+                      </label>
+                    } @empty { <p>Nenhuma opção de entrega disponível para este endereço e estes itens.</p> }
+                  </fieldset>
                   @if (result.unavailable.length) { <p class="muted">Serviços indisponíveis: @for (service of result.unavailable; track service.id) { {{ service.name }}; }</p> }
                   @if (!quoteValid()) { <p class="field-error">A cotação expirou. Consulte as opções novamente.</p> }
                 }

@@ -1,0 +1,39 @@
+services:
+  backend:
+    environment:
+      SERVER_FORWARD_HEADERS_STRATEGY: framework
+      STORE_SESSION_COOKIE_SECURE: "true"
+      MELHOR_ENVIO_CLIENT_ID: "${MELHOR_ENVIO_CLIENT_ID:-}"
+      MELHOR_ENVIO_CLIENT_SECRET: "${MELHOR_ENVIO_CLIENT_SECRET:-}"
+      MELHOR_ENVIO_REDIRECT_URI: "${MELHOR_ENVIO_REDIRECT_URI:-}"
+      MELHOR_ENVIO_USER_AGENT: "${MELHOR_ENVIO_USER_AGENT:-}"
+      MELHOR_ENVIO_ENCRYPTION_KEY: "${MELHOR_ENVIO_ENCRYPTION_KEY:-}"
+
+  https:
+    image: nginx:stable-alpine
+    ports:
+      - "127.0.0.1:4443:443"
+    volumes:
+      - ./docker/local-https.conf:/etc/nginx/conf.d/default.conf:ro
+      - type: bind
+        source: ./.local/https/server.crt
+        target: /etc/nginx/local-https/server.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./.local/https/server.key
+        target: /etc/nginx/local-https/server.key
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8081/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12

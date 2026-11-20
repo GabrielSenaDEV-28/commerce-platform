@@ -1,0 +1,48 @@
+<div class="title"><span class="overline">LOGÍSTICA</span><h2>Entrega e retirada</h2><p>Configure de onde saem os produtos e conecte sua conta para consultar fretes.</p></div>
+<section aria-labelledby="origin-title" [attr.aria-busy]="loading()">
+  <h3 id="origin-title">Origem da loja</h3>
+  <p>Este é o endereço de saída das encomendas, não o endereço do cliente. Ao habilitar retirada, o endereço e as instruções ficam disponíveis aos clientes.</p>
+  @if (loadError()) { <p class="field-error" role="alert">{{ loadError() }}</p><button type="button" (click)="load()">Tentar carregar origem novamente</button> }
+  <form [formGroup]="form" (ngSubmit)="save()" novalidate>
+    <fieldset [disabled]="loading() || saving() || connecting() || !!loadError()">
+      <div class="fields">
+        <div><label for="origin-postal">CEP</label><input id="origin-postal" formControlName="postalCode" autocomplete="postal-code" placeholder="00000-000" maxlength="9" /></div>
+        <div><label for="origin-state">Estado</label><select id="origin-state" formControlName="state"><option value="">Selecione</option>@for (state of states; track state) { <option [value]="state">{{ state }}</option> }</select></div>
+        <div class="wide"><label for="origin-street">Rua ou avenida</label><input id="origin-street" formControlName="street" maxlength="150" /></div>
+        <div><label for="origin-number">Número</label><input id="origin-number" formControlName="number" maxlength="30" /></div>
+        <div><label for="origin-complement">Complemento (opcional)</label><input id="origin-complement" formControlName="complement" maxlength="150" /></div>
+        <div><label for="origin-district">Bairro</label><input id="origin-district" formControlName="district" maxlength="100" /></div>
+        <div><label for="origin-city">Cidade</label><input id="origin-city" formControlName="city" maxlength="100" /></div>
+      </div>
+      @if (form.touched && form.invalid) { <p class="field-error" role="alert">Confira os campos obrigatórios, os limites de tamanho e o CEP com 8 números.</p> }
+      <label class="check"><input type="checkbox" formControlName="pickupEnabled" /> Permitir retirada na loja</label>
+      <label for="pickup-instructions">Instruções de retirada (opcional)</label>
+      <textarea id="pickup-instructions" formControlName="pickupInstructions" maxlength="1000" placeholder="Ex.: retirada de segunda a sexta, das 9h às 18h."></textarea>
+      <button class="primary" type="submit">{{ saving() ? 'Salvando...' : 'Salvar origem e retirada' }}</button>
+    </fieldset>
+  </form>
+</section>
+<section aria-labelledby="connection-title" [attr.aria-busy]="statusLoading() || connecting()">
+  <h3 id="connection-title">Melhor Envio · ambiente de testes</h3>
+  <p>Conecte a conta sandbox para consultar preços e prazos. Não compra fretes nem gera etiquetas.</p>
+  <p class="connection-status" [class.connected]="status() === 'CONNECTED'"><strong>{{ statusLoading() ? 'Consultando conexão...' : statusLabel() }}</strong></p>
+  @if (!secure) { <p class="field-error">Abra sua loja pelo endereço HTTPS para autorizar o Melhor Envio.</p> }
+  @if (connectionError()) { <p class="field-error" role="alert">{{ connectionError() }}</p> }
+  @if (status() === 'PENDING') { <p>Uma autorização foi iniciada. Se você não a concluiu, pode iniciar novamente; o link anterior deixará de valer.</p> }
+  @if (status() === 'REAUTHORIZE') { <p>Autorize novamente para voltar a consultar fretes.</p> }
+  <div class="actions">
+    @if (status() !== 'CONNECTED' && status() !== 'REFRESHING' && status() !== null) {
+      <button class="primary" type="button" (click)="connect()" [disabled]="!secure || isSaving() || statusLoading() || loading() || !!loadError()">Conectar ao Melhor Envio</button>
+    }
+    <button type="button" (click)="refreshStatus()" [disabled]="isSaving() || statusLoading()">Consultar estado da conexão</button>
+    @if (status() !== null && status() !== 'DISCONNECTED') {
+      <button type="button" class="signout" (click)="confirmingDisconnect.set(true)" [disabled]="isSaving() || statusLoading()">Desconectar</button>
+    }
+  </div>
+  @if (confirmingDisconnect()) {
+    <div class="confirmation" role="group" aria-label="Confirmar desconexão">
+      <p>Remover a conexão desta plataforma? As cotações ficarão indisponíveis até uma nova autorização. Isso não exclui sua conta no Melhor Envio.</p>
+      <div class="actions"><button type="button" class="signout" (click)="disconnect()" [disabled]="isSaving()">Confirmar desconexão</button><button type="button" (click)="confirmingDisconnect.set(false)" [disabled]="isSaving()">Cancelar</button></div>
+    </div>
+  }
+</section>

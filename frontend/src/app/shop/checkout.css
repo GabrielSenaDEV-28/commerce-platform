@@ -4,7 +4,9 @@ fieldset { margin:0; padding:0; border:0; min-width:0; }
 legend { font-size:.85rem; margin-bottom:12px; }
 .check-line, .shipping-choice { display:flex; gap:12px; align-items:center; padding:12px 0; font-size:.85rem; line-height:1.6; cursor:pointer; }
 .check-line input, .shipping-choice input { flex-shrink:0; accent-color:#294b40; }
-.shipping-choice { border-bottom:1px solid #dfe7df; }
+.shipping-choice { border:1px solid #dfe7df; border-radius:6px; margin:10px 0; padding:14px; }
+.shipping-choice.selected { border-color:#7d9b82; background:#edf5e9; }
+.shipping-details { display:block; color:#52675c; }
 select { display:block; width:100%; margin:12px 0; }
 .cart-layout > div { min-width:0; }
 .cart-layout > div > .checkout-panel:first-child { margin-top:0; }

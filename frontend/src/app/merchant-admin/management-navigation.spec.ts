@@ -11,6 +11,7 @@ import { EditableRouteReuseStrategy } from '../editable-route-reuse.strategy';
 import { CategoryDetailsComponent } from './category-details.component';
 import { MerchantAdminComponent } from './merchant-admin.component';
 import { ProductDetailsComponent } from './product-details.component';
+import { vi } from 'vitest';
 
 describe('management view after save', () => {
   let harness: RouterTestingHarness;
@@ -37,6 +38,23 @@ describe('management view after save', () => {
     const input = harness.routeNativeElement!.querySelector<HTMLInputElement>(selector)!;
     input.value = value; input.dispatchEvent(new Event('input'));
   }
+
+  it('opens delivery settings on the merchant route and protects unsaved origin changes', async () => {
+    const instance = await harness.navigateByUrl('/painel/entrega', MerchantAdminComponent);
+    http.expectOne('/api/store/me').flush({ name: 'Loja', subdomain: 'loja' });
+    harness.detectChanges();
+    http.expectOne('/api/store/shipping-settings').flush({}, { status: 404, statusText: 'Not Found' });
+    http.expectOne('/api/integrations/melhor-envio').flush({ status: 'DISCONNECTED' });
+    harness.detectChanges();
+    expect(harness.routeNativeElement!.textContent).toContain('Origem da loja');
+    fill('#origin-street', 'Rua de origem');
+    expect(instance.hasUnsavedChanges()).toBe(true);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    expect(await TestBed.inject(Router).navigateByUrl('/painel/perfil')).toBe(false);
+    expect(TestBed.inject(Router).url).toBe('/painel/entrega');
+    expect(confirm).toHaveBeenCalledOnce();
+    confirm.mockRestore();
+  });
 
   it('opens the saved category and can edit it again from its view', async () => {
     await harness.navigateByUrl('/painel/categorias');

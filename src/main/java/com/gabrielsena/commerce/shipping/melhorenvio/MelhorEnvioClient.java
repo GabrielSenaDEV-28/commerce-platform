@@ -78,11 +78,8 @@ public class MelhorEnvioClient {
         for (ProviderService service : response) {
             if (service == null || service.id() == null || service.id() <= 0
                     || service.name() == null || service.name().isBlank()
-                    || service.company() == null || service.company().id() == null) {
+                    || service.company() == null || service.company().id() == null || service.company().id() <= 0) {
                 throw new MelhorEnvioException(Reason.INVALID_RESPONSE);
-            }
-            if (service.company().id() != 1) {
-                continue;
             }
             if (service.error() != null && !service.error().isBlank()) {
                 unavailable.add(new UnavailableService(service.id(), service.name()));
