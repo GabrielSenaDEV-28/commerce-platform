@@ -60,7 +60,7 @@ describe('checkout access and navigation', () => {
     http.expectOne('/api/public/store-auth/session/login').flush({ accountKind: 'customer', identity: 'customer-id', accessToken: 'access', refreshToken: 'r', expiresIn: 900 });
     await harness.fixture.whenStable();
     expect(TestBed.inject(Router).url).toBe('/checkout?item=v1');
-    http.expectOne('/api/public/customer/profile').flush({ name: 'Cliente', phone: '11999999999' });
+    http.expectOne('/api/public/customer/profile').flush({ name: 'Cliente', phone: '11999999999', cpf: '52998224725' });
     http.expectOne('/api/public/customer/addresses').flush([]);
     http.expectOne('/api/public/pickup').flush({ available: false });
     http.expectOne('/api/public/cart/customer').flush({ token: 'customer-cart', cart: { items: [] } });
@@ -92,7 +92,7 @@ describe('checkout access and navigation', () => {
     request.flush(address);
     await harness.fixture.whenStable();
     expect(TestBed.inject(Router).url).toBe('/checkout?item=v1&address=a1&returning=1');
-    http.expectOne('/api/public/customer/profile').flush({ name: 'Cliente', phone: '11999999999' });
+    http.expectOne('/api/public/customer/profile').flush({ name: 'Cliente', phone: '11999999999', cpf: '52998224725' });
     http.expectOne('/api/public/customer/addresses').flush([address]);
     http.expectOne('/api/public/pickup').flush({ available: false });
     http.expectOne('/api/public/cart/customer').flush({ token: 'customer-cart', cart: { items: [{ productId: 'p1', variantId: 'v1', name: 'Camisa', quantity: 1, price: 20, available: true }] } });

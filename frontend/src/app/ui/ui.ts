@@ -1,5 +1,6 @@
-import { Component, Directive, EventEmitter, Input, Output } from '@angular/core';
+import { Component, Directive, ElementRef, EventEmitter, Input, Output, Renderer2, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { CustomSelectDirective } from './custom-select.directive';
 
 @Component({
   selector: 'button',
@@ -33,6 +34,21 @@ export class UiInputDirective {}
 
 @Directive({ selector: 'a', host: { class: 'ui-link' } })
 export class UiLinkDirective {}
+
+@Directive({ selector: 'a[appBack], button[appBack]', host: { class: 'ui-back' } })
+export class BackButtonDirective {
+  constructor() {
+    const element = inject(ElementRef<HTMLElement>).nativeElement;
+    const renderer = inject(Renderer2);
+    const svg = renderer.createElement('svg', 'svg');
+    renderer.setAttribute(svg, 'viewBox', '0 0 24 24');
+    renderer.setAttribute(svg, 'aria-hidden', 'true');
+    const path = renderer.createElement('path', 'svg');
+    renderer.setAttribute(path, 'd', 'M19 12H5m7-7-7 7 7 7');
+    renderer.appendChild(svg, path);
+    renderer.appendChild(element, svg);
+  }
+}
 
 @Directive({ selector: 'main', host: { id: 'main-content', tabindex: '-1' } })
 export class MainContentDirective {}
@@ -85,4 +101,4 @@ export class RecordCardComponent {
   @Output() selectRecord = new EventEmitter<void>();
 }
 
-export const UI = [UiButtonComponent, InfoComponent, FieldErrorComponent, RecordCardComponent, UiInputDirective, UiLinkDirective, NoticeComponent, UiDialogComponent, MainContentDirective] as const;
+export const UI = [UiButtonComponent, InfoComponent, FieldErrorComponent, RecordCardComponent, UiInputDirective, CustomSelectDirective, UiLinkDirective, BackButtonDirective, NoticeComponent, UiDialogComponent, MainContentDirective] as const;

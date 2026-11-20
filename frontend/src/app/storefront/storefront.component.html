@@ -48,7 +48,7 @@
               <div class="empty-state"><div class="empty-symbol" aria-hidden="true">✳</div><span class="overline">UM NOVO COMEÇO</span>
                 @if (result.page > 0) {
                   <h3>Não há produtos nesta página.</h3><p>O catálogo pode ter mudado desde sua última visita.</p>
-                  <button class="retry" type="button" (click)="load(0)">Voltar para a primeira página</button>
+                  <button appBack class="retry" type="button" (click)="load(0)" aria-label="Voltar para a primeira página" title="Voltar para a primeira página">Voltar para a primeira página</button>
                 } @else {
                   <h3>Tem novidade chegando por aqui.</h3><p>Esta loja ainda não tem produtos disponíveis. Volte mais tarde para conhecer a coleção.</p>
                 }

@@ -2,16 +2,18 @@ import { CurrencyPipe, DatePipe } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, DestroyRef, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, RouterLink } from '@angular/router';
-import { timer } from 'rxjs';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { interval, timer } from 'rxjs';
 import { UI } from '../ui/ui';
 import { Order, PixPayment } from './checkout.models';
 import { CheckoutService, checkoutError } from './checkout.service';
+import { CheckoutExpiredDialogComponent } from '../ui/checkout-expired-dialog.component';
 
 @Component({
   selector: 'app-order-page',
-  imports: [...UI, RouterLink, CurrencyPipe, DatePipe],
+  imports: [...UI, RouterLink, CurrencyPipe, DatePipe, CheckoutExpiredDialogComponent],
   template: `
+    <app-checkout-expired-dialog [open]="expiredNotice()" (confirmed)="acknowledgeExpiry()" />
     <main class="shop-wrap">
       <nav class="breadcrumbs" aria-label="Navegação estrutural"><a routerLink="/">Início</a><span>/</span><a routerLink="/conta/pedidos">Pedidos</a><span>/</span><span aria-current="page">Detalhes</span></nav>
       <h1>Seu pedido.</h1>
@@ -21,25 +23,33 @@ import { CheckoutService, checkoutError } from './checkout.service';
         <section class="checkout-panel"><h2>Pedido {{ info.id }}</h2><p>Estado atual: <strong>{{ status(info.status) }}</strong></p><p>Criado em {{ info.createdAt | date:'dd/MM/yyyy HH:mm' }} · Prazo da reserva: {{ info.expiresAt | date:'dd/MM/yyyy HH:mm' }}</p>
           @if (info.status === 'PENDING') { <p>Criar este pedido não confirma pagamento, venda ou liberação para entrega/retirada.</p> }
           @if (info.status === 'PAYMENT_REVIEW') { <p>O pagamento precisa de revisão. O pedido não está liberado para entrega ou retirada.</p> }
-          <button type="button" [disabled]="loading() || pixLoading()" (click)="load()">Atualizar estado do pedido</button>
         </section>
         @if (pixLoading() || pixError() || pix()?.enabled) {
-          <section class="checkout-panel" aria-label="Pagamento Pix">
-            <h2>Pix de teste</h2>
-            <p>Ambiente sandbox. Não use seu aplicativo bancário nem faça uma transferência real.</p>
+          <section class="checkout-panel pix-panel" aria-label="Pagamento Pix">
+            <div class="pix-heading"><div><span class="overline">PAGAMENTO</span><h2>Pix</h2></div>
+              <span class="pix-badge" [class.confirmed]="paymentConfirmed()">{{ paymentConfirmed() ? 'Pagamento confirmado' : 'Modo de teste · não pagar pelo banco' }}</span>
+            </div>
             @if (pixLoading()) { <p role="status">Consultando Pix...</p> }
-            @if (pixError()) { <p class="field-error">{{ pixError() }}</p> }
+            @if (pixError()) { <p class="field-error">{{ pixError() }}</p><button type="button" [disabled]="pixLoading() || loading()" (click)="load()">Tentar novamente</button> }
             @if (pix(); as payment) {
               @if (payment.status === 'PENDING' && !pixExpired() && payment.copyCode) {
-                <p>Aguardando confirmação · válido até {{ payment.expiresAt | date:'dd/MM/yyyy HH:mm:ss' }}.</p>
-                @if (payment.qrImage) {
-                  <img width="180" height="180" [src]="'data:image/png;base64,' + payment.qrImage" alt="QR Code do Pix de teste" />
-                }
-                <label for="pix-code">Pix Copia e Cola</label>
-                <input id="pix-code" [value]="payment.copyCode" readonly (focus)="$any($event.target).select()" />
-                <button type="button" (click)="copy(payment.copyCode)">Copiar código Pix</button>
-                @if (copyMessage()) { <p role="status">{{ copyMessage() }}</p> }
+                <div class="pix-layout">
+                  @if (payment.qrImage) {
+                    <div class="pix-qr"><img width="200" height="200" [src]="'data:image/png;base64,' + payment.qrImage" alt="QR Code do Pix de teste" /></div>
+                  }
+                  <div class="pix-instructions">
+                    <h3>Aguardando confirmação</h3>
+                    <p class="pix-amount">{{ info.total | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</p>
+                    <p>Válido até {{ payment.expiresAt | date:'dd/MM/yyyy HH:mm:ss' }}.</p>
+                    <label for="pix-code">Pix Copia e Cola</label>
+                    <div class="pix-copy"><input id="pix-code" [value]="payment.copyCode" readonly (focus)="selectCode($event)" /><button type="button" (click)="copy(payment.copyCode)">Copiar código Pix</button></div>
+                    @if (copyMessage()) { <p role="status">{{ copyMessage() }}</p> }
+                    <p class="muted">A confirmação é consultada automaticamente.</p>
+                  </div>
+                </div>
               }
+              @if (payment.status === 'PAID') { <p class="pix-confirmed" role="status">Pagamento confirmado pelo provedor. O pedido está pago.</p> }
+              @if (payment.status === 'REVIEW') { <p role="status">Pagamento em revisão. Aguarde a análise da loja antes de receber ou retirar os produtos.</p> }
               @if (payment.status === 'EXPIRED' || (payment.status === 'PENDING' && pixExpired())) { <p>O prazo do Pix terminou.</p> }
               @if (info.status === 'PENDING' && (!payment.status || payment.status === 'CREATING')) {
                 <button type="button" [disabled]="pixLoading()" (click)="loadPix(true)">{{ payment.status === 'CREATING' || pixError() ? 'Retomar emissão do Pix de teste' : 'Gerar Pix de teste' }}</button>
@@ -66,12 +76,14 @@ import { CheckoutService, checkoutError } from './checkout.service';
         </aside></div>
       }
     </main>`,
-  styleUrls: ['./shop.css', './checkout.css'],
+  styleUrls: ['./shop.css', './checkout.css', './order-page.css'],
 })
 export class OrderPageComponent {
   private readonly checkout = inject(CheckoutService);
   private readonly id = inject(ActivatedRoute).snapshot.paramMap.get('id')!;
   private readonly destroy = inject(DestroyRef);
+  private readonly router = inject(Router);
+  protected readonly expiredNotice = signal(false);
   protected readonly loading = signal(false);
   protected readonly error = signal('');
   protected readonly order = signal<Order | null>(null);
@@ -80,21 +92,43 @@ export class OrderPageComponent {
   protected readonly pixError = signal('');
   protected readonly copyMessage = signal('');
   private readonly now = signal(Date.now());
+  private deadlineChecked = false;
   constructor() {
-    timer(0, 1000).pipe(takeUntilDestroyed(this.destroy)).subscribe(() => this.now.set(Date.now()));
+    timer(0, 1000).pipe(takeUntilDestroyed(this.destroy)).subscribe(() => {
+      this.now.set(Date.now());
+      const order = this.order();
+      if (order?.status === 'PENDING' && Date.parse(order.expiresAt) <= this.now() && !this.loading() && !this.pixLoading() && !this.deadlineChecked) {
+        this.deadlineChecked = true;
+        this.load();
+      }
+    });
+    interval(20_000).pipe(takeUntilDestroyed(this.destroy)).subscribe(() => {
+      if (['PENDING', 'PAYMENT_REVIEW', 'PAID'].includes(this.order()?.status ?? '') &&
+          !this.loading() && !this.pixLoading() && !this.error() && !this.pixError()) this.load(true);
+    });
     this.load();
   }
   protected pixExpired(): boolean {
     const deadline = this.pix()?.expiresAt;
     return !!deadline && Date.parse(deadline) <= this.now();
   }
+  protected paymentConfirmed(): boolean { return this.pix()?.status === 'PAID'; }
+  protected acknowledgeExpiry(): void {
+    this.expiredNotice.set(false);
+    this.checkout.beginNext();
+    void this.router.navigateByUrl('/');
+  }
+  protected selectCode(event: FocusEvent): void {
+    if (event.target instanceof HTMLInputElement) event.target.select();
+  }
   protected status(value: string): string {
     return ({ PENDING: 'Pendente', EXPIRED: 'Expirado', CANCELLED: 'Cancelado', PAID: 'Pago',
-      PAYMENT_REVIEW: 'Pagamento em revisão' } as Record<string, string>)[value] ?? value;
+      PAYMENT_REVIEW: 'Pagamento em revisão', DELIVERED: 'Entregue' } as Record<string, string>)[value] ?? value;
   }
-  protected load(): void {
-    if (this.loading()) return;
-    this.loading.set(true); this.error.set(''); this.order.set(null);
+  protected load(background = false): void {
+    if (this.loading() || this.pixLoading()) return;
+    this.loading.set(true); this.error.set('');
+    if (!background) this.order.set(null);
     this.checkout.ownedOrder(this.id).pipe(takeUntilDestroyed(this.destroy)).subscribe({
       next: (order) => { this.order.set(order); this.loading.set(false); this.loadPix(); },
       error: (error: unknown) => {
@@ -110,15 +144,17 @@ export class OrderPageComponent {
     this.checkout.pix(this.id, create).pipe(takeUntilDestroyed(this.destroy)).subscribe({
       next: (payment) => {
         this.pix.set(payment); this.pixLoading.set(false);
+        if (Date.parse(payment.expiresAt) > this.now()) this.deadlineChecked = false;
         this.order.update((order) => order && ({ ...order, expiresAt: payment.expiresAt,
           status: payment.status === 'REVIEW' ? 'PAYMENT_REVIEW' :
-            payment.status === 'PAID' ? 'PAID' : payment.status === 'EXPIRED' && order.status === 'PENDING' ? 'EXPIRED' : order.status }));
+            payment.status === 'PAID' && order.status !== 'DELIVERED' ? 'PAID' : payment.status === 'EXPIRED' && order.status === 'PENDING' ? 'CANCELLED' : order.status }));
+        if (this.order()?.status === 'CANCELLED' || this.order()?.status === 'EXPIRED') this.expiredNotice.set(true);
       },
       error: () => {
         if (!create) this.pix.set(null);
         this.pixLoading.set(false);
-        this.pixError.set(create ? 'Não foi possível confirmar a emissão. Retome a mesma tentativa ou atualize o pedido.'
-          : 'Não foi possível consultar o Pix. Atualize o estado do pedido para tentar novamente.');
+        this.pixError.set(create ? 'Não foi possível confirmar a emissão. Consulte novamente antes de repetir a tentativa.'
+          : 'Não foi possível consultar o Pix. Tente novamente para conferir o pagamento.');
       },
     });
   }

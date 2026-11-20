@@ -9,7 +9,7 @@ interface Category { id: string; name: string; active: boolean; hasColor: boolea
 @Component({
   selector: 'app-category-details',
   imports: [RouterLink, ...UI],
-  template: `<div class="admin"><header><a routerLink="/" class="brand">c. <span>commerce</span></a><span>CATEGORIA</span><a routerLink="/painel/categorias">Voltar às categorias</a></header>
+  template: `<div class="admin"><header><a routerLink="/" class="brand">c. <span>commerce</span></a><span>CATEGORIA</span><a appBack routerLink="/painel/categorias" aria-label="Voltar às categorias" title="Voltar às categorias">Voltar às categorias</a></header>
     <main><nav class="breadcrumbs" aria-label="Navegação estrutural"><a routerLink="/painel/categorias">Categorias</a><span>/</span><span aria-current="page">{{ category()?.name ?? 'Categoria' }}</span></nav>
     @if (loading()) { <p role="status">Carregando categoria...</p> }
     @if (error()) { <p class="error" role="alert">{{ error() }}</p><button type="button" [disabled]="loading()" (click)="load()">Tentar novamente</button> }

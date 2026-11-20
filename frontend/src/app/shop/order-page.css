@@ -1,0 +1,24 @@
+.pix-heading { display:flex; justify-content:space-between; align-items:center; gap:16px; }
+.pix-heading h2 { margin:8px 0 0; }
+.pix-badge { padding:8px 12px; border-radius:20px; background:#f2eddf; color:#6b5934; font-size:.75rem; font-weight:650; }
+.pix-badge.confirmed, .pix-confirmed { background:#edf5e9; color:#315d42; }
+.pix-warning { padding:12px 16px; background:#f8f5ed; border-radius:6px; font-size:.85rem; line-height:1.6; }
+.pix-layout { display:grid; grid-template-columns:224px minmax(0,1fr); align-items:start; gap:28px; margin-top:24px; }
+.pix-qr { display:flex; justify-content:center; padding:12px; background:white; border:1px solid #e0e8df; border-radius:12px; }
+.pix-qr img { display:block; max-width:100%; height:auto; }
+.pix-instructions { min-width:0; }
+.pix-instructions h3 { margin:0; font:400 1.4rem Georgia,serif; }
+.pix-instructions p { font-size:.85rem; line-height:1.6; color:#52675c; }
+.pix-instructions .pix-amount { font-size:1.6rem; font-weight:650; color:#294b40; margin:12px 0; }
+.pix-instructions label { display:block; font-size:.8rem; font-weight:650; margin:20px 0 8px; }
+.pix-copy { display:flex; gap:8px; margin-bottom:18px; }
+.pix-copy input { min-width:0; flex:1; font-family:monospace; }
+.pix-copy button { flex-shrink:0; }
+.pix-confirmed { padding:16px; border-radius:6px; }
+@media(max-width:720px) {
+  .pix-heading { align-items:flex-start; flex-direction:column; }
+  .pix-layout { grid-template-columns:1fr; gap:20px; }
+  .pix-qr { width:200px; max-width:100%; box-sizing:border-box; justify-self:center; }
+  .pix-copy { flex-direction:column; }
+  .pix-copy input { width:100%; box-sizing:border-box; }
+}

@@ -14,9 +14,10 @@ import { UI } from './ui';
   host: { '[class.scrolled]': 'scrolled()', '(window:scroll)': 'updateScroll()' },
   template: `
     <header class="header-inner">
-      <app-mobile-menu label="Explorar loja">
+      <app-mobile-menu #browseMenu label="Explorar loja">
         <a routerLink="/">Início</a>
-        <a routerLink="/" fragment="colecao">Explorar produtos</a>
+        @if (routePath() === '/') { <a href="#colecao" (click)="explore($event, browseMenu)">Explorar produtos</a> }
+        @else { <a routerLink="/" fragment="colecao">Explorar produtos</a> }
         <span>Categorias · Em breve</span>
       </app-mobile-menu>
       <a class="wordmark" routerLink="/" aria-label="Commerce, início da loja">
@@ -24,9 +25,11 @@ import { UI } from './ui';
         <span>commerce<small>SUA LOJA ONLINE</small></span>
       </a>
       <nav class="browse" aria-label="Navegação da loja">
-        <a routerLink="/" fragment="colecao">Explorar produtos</a>
+        @if (routePath() === '/') { <a href="#colecao" (click)="explore($event)">Explorar produtos</a> }
+        @else { <a routerLink="/" fragment="colecao">Explorar produtos</a> }
         <span class="coming-soon">Categorias <small>Em breve</small></span>
       </nav>
+      @if (routePath() !== '/entrar' && routePath() !== '/painel/login') {
       <nav class="header-actions" aria-label="Acessos rápidos">
         <a class="icon desktop-account" [routerLink]="accountPath()" [class.active]="accountActive()"
           [attr.aria-current]="routePath() === accountPath() ? 'page' : null" [attr.aria-label]="accountLabel()" [attr.title]="accountLabel()">
@@ -70,6 +73,7 @@ import { UI } from './ui';
           @if (cart.count()) { <span class="badge" aria-hidden="true">{{ cart.count() }}</span> }
         </a>
       </nav>
+      }
     </header>
   `,
   styles: [`
@@ -143,6 +147,15 @@ export class ShopHeaderComponent {
 
   protected updateScroll(): void {
     this.scrolled.set((this.window?.scrollY ?? 0) > 8);
+  }
+
+  protected explore(event: MouseEvent, menu?: MobileMenuComponent): void {
+    if (this.routePath() !== '/' || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    const collection = this.window?.document.getElementById('colecao');
+    if (!collection) return;
+    event.preventDefault();
+    menu?.close();
+    collection.scrollIntoView({ behavior: this.window?.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
   }
 
   protected logout(menu: MobileMenuComponent): void {

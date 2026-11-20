@@ -44,6 +44,7 @@ describe('registration', () => {
   it('creates the store and redirects to its login without sharing tokens', async () => {
     await harness.navigateByUrl('/painel/cadastro', RegisterComponent);
     fillAccount();
+    expect(harness.routeNativeElement!.querySelector('#cpf')).toBeNull();
     fill('#storeName', 'Minha Loja');
     fill('#subdomain', 'minha-loja');
     submit();
@@ -68,14 +69,35 @@ describe('registration', () => {
   it('registers a customer using the store-scoped endpoint', async () => {
     await harness.navigateByUrl('/cadastro', RegisterComponent);
     fillAccount();
+    fill('#cpf', '529.982.247-25');
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
     submit();
     const request = http.expectOne('/api/public/store-auth/session/register');
-    expect(request.request.body).toEqual({ name: 'Gabriel', email: 'user@example.com', password: 'password1234' });
+    expect(request.request.body).toEqual({ name: 'Gabriel', email: 'user@example.com', password: 'password1234', cpf: '529.982.247-25' });
     request.flush({ accessToken: 'access', tokenType: 'Bearer', expiresIn: 900, accountKind: 'customer', identity: 'customer-id' }, { status: 201, statusText: 'Created' });
     harness.detectChanges();
     expect(TestBed.inject(AuthService).customerIdentity()).toBe('customer-id');
     expect(navigate).toHaveBeenCalledWith('/', { replaceUrl: true });
+  });
+
+  it('requires a valid CPF and marks duplicate CPF on its own field', async () => {
+    await harness.navigateByUrl('/cadastro', RegisterComponent);
+    fillAccount();
+    submit();
+    http.expectNone('/api/public/store-auth/session/register');
+    expect(harness.routeNativeElement!.textContent).toContain('Informe um CPF válido');
+    for (const invalid of ['111.111.111-11', '52998224724']) {
+      fill('#cpf', invalid);
+      submit();
+      http.expectNone('/api/public/store-auth/session/register');
+    }
+    fill('#cpf', '52998224725');
+    submit();
+    http.expectOne('/api/public/store-auth/session/register')
+      .flush({ code: 'CPF_ALREADY_IN_USE' }, { status: 409, statusText: 'Conflict' });
+    harness.detectChanges();
+    expect(harness.routeNativeElement!.textContent).toContain('Este CPF já pertence a uma conta nesta loja');
+    expect(harness.routeNativeElement!.querySelector('#email')!.getAttribute('aria-invalid')).toBe('false');
   });
 
   it('rejects invalid subdomain and mismatched or short passwords', async () => {
@@ -101,6 +123,7 @@ describe('registration', () => {
   ])('shows customer error %i', async (status, message) => {
     await harness.navigateByUrl('/cadastro', RegisterComponent);
     fillAccount();
+    fill('#cpf', '52998224725');
     submit();
     http.expectOne('/api/public/store-auth/session/register').flush({}, { status, statusText: 'Error' });
     harness.detectChanges();

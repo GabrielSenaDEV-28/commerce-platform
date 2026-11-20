@@ -5,6 +5,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { AccountKind, AuthService, safeReturnUrl } from '../auth/auth.service';
+import { cpfValidator } from '../customer-account/cpf';
 import { watchUnsavedChanges } from '../unsaved-changes';
 import { StoreNavigation } from '../auth/store-navigation.service';
 import { applyServerFieldErrors } from '../ui/validation';
@@ -35,6 +36,7 @@ export class RegisterComponent {
     storeName: [''],
     subdomain: [''],
     email: ['', [Validators.required, Validators.email, Validators.maxLength(320)]],
+    cpf: [''],
     password: ['', [Validators.required, Validators.minLength(12), Validators.maxLength(128), Validators.pattern(/\S/)]],
     confirmPassword: ['', Validators.required],
   });
@@ -59,7 +61,7 @@ export class RegisterComponent {
   isSaving(): boolean { return this.loading(); }
 
   private configureStoreFields(): void {
-    const { storeName, subdomain } = this.form.controls;
+    const { storeName, subdomain, cpf } = this.form.controls;
     storeName.setValidators(this.isMerchant() ? [Validators.required, Validators.pattern(/\S/)] : []);
     subdomain.setValidators(this.isMerchant() ? [
       Validators.required,
@@ -68,6 +70,8 @@ export class RegisterComponent {
     ] : []);
     storeName.updateValueAndValidity();
     subdomain.updateValueAndValidity();
+    cpf.setValidators(this.isMerchant() ? [] : [Validators.required, cpfValidator]);
+    cpf.updateValueAndValidity();
   }
 
   protected submit(): void {
@@ -77,7 +81,7 @@ export class RegisterComponent {
       return;
     }
 
-    const { name, storeName, subdomain, email, password } = this.form.getRawValue();
+    const { name, storeName, subdomain, email, password, cpf } = this.form.getRawValue();
     const kind = this.kind();
     const body = kind === 'merchant'
       ? { merchantName: name.trim(), storeName: storeName.trim(), subdomain: subdomain.toLowerCase(), email: email.trim(), password }
@@ -86,7 +90,7 @@ export class RegisterComponent {
     this.loading.set(true);
     const registration: Observable<{ subdomain: string } | null | void> = kind === 'merchant'
       ? this.http.post<{ subdomain: string } | null>('/api/merchants', body)
-      : this.auth.registerCustomer(name.trim(), email.trim(), password);
+      : this.auth.registerCustomer(name.trim(), email.trim(), password, cpf.trim());
     registration.pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: (response) => {
         if (kind === 'merchant' && response && response.subdomain) {
@@ -94,6 +98,7 @@ export class RegisterComponent {
         }
         this.form.controls.password.reset();
         this.form.controls.confirmPassword.reset();
+        this.form.controls.cpf.reset();
         this.complete.set(true);
         this.loading.set(false);
         if (kind === 'merchant' && this.storeAddress()) this.navigation.open(`${this.storeAddress()}/entrar`);
@@ -106,7 +111,9 @@ export class RegisterComponent {
       error: (error: unknown) => {
         if (!applyServerFieldErrors(this.form, error)) {
           if (error instanceof HttpErrorResponse && error.status === 409 && kind === 'customer') {
-            this.form.controls.email.setErrors({ conflict: true }); this.form.controls.email.markAsTouched();
+            const field = error.error?.code === 'CPF_ALREADY_IN_USE' ? 'cpf' : 'email';
+            this.form.controls[field].setErrors({ conflict: true });
+            this.form.controls[field].markAsTouched();
           } else this.error.set(registrationError(error, kind));
         }
         this.loading.set(false);

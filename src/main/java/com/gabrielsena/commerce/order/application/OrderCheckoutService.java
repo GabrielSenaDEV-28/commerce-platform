@@ -46,6 +46,10 @@ public class OrderCheckoutService {
         if (existing != null) {
             return existing;
         }
+        var profile = profiles.profile(store, customer.id());
+        if (!CustomerProfileService.isCheckoutProfileComplete(profile)) {
+            throw new OrderService.IncompleteProfile();
+        }
         if (fulfillmentType == FulfillmentType.PICKUP) {
             return orders.create(store, token, reservationId, customer, acceptPartial, addressId, fulfillmentType);
         }

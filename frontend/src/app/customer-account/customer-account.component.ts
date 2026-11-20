@@ -1,7 +1,7 @@
 import { UI } from '../ui/ui';
 import { CurrencyPipe, DatePipe, DOCUMENT, NgTemplateOutlet } from '@angular/common';
 import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
-import { Component, DestroyRef, inject, signal } from '@angular/core';
+import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink, RouterLinkActive } from '@angular/router';
@@ -12,7 +12,9 @@ import { applyServerFieldErrors } from '../ui/validation';
 import { ToastService } from '../ui/toast.service';
 import { KeepScrollDirective } from '../ui/keep-scroll.directive';
 import { AddressInput, CustomerAddress as Address, CustomerProfile as Profile } from './customer.models';
-interface OrderSummary { id: string; status: string; createdAt: string; total: number; fulfillmentType: string }
+import { cpfValidator, isValidCpf } from './cpf';
+interface ProductPreview { name: string; photo: string | null }
+interface OrderSummary { id: string; status: string; createdAt: string; total: number; fulfillmentType: string; previews?: ProductPreview[] }
 interface OrderPage { content: OrderSummary[]; page: number; totalPages: number }
 type Section = 'perfil' | 'enderecos' | 'pedidos' | 'pagamentos' | 'seguranca';
 const sections: Section[] = ['perfil', 'enderecos', 'pedidos', 'pagamentos', 'seguranca'];
@@ -43,8 +45,25 @@ export class CustomerAccountComponent {
   protected readonly success = signal('');
   protected readonly expired = signal(false);
   protected readonly profile = signal<Profile | null>(null);
+  protected readonly missingProfileFields = computed(() => {
+    const profile = this.profile();
+    if (!profile) return [];
+    return [
+      !profile.name?.trim() ? 'nome' : '',
+      !profile.phone?.trim() ? 'telefone' : '',
+      !isValidCpf(profile.cpf ?? '') ? 'CPF' : '',
+    ].filter(Boolean);
+  });
   protected readonly addresses = signal<Address[]>([]);
   protected readonly orders = signal<OrderPage | null>(null);
+  protected readonly failedPhotos = signal<Set<string>>(new Set());
+  protected orderStatus(status: string): string {
+    return ({ PENDING: 'Pendente', PAID: 'Pago', DELIVERED: 'Entregue', PAYMENT_REVIEW: 'Pagamento em revisão',
+      CANCELLED: 'Cancelado', EXPIRED: 'Cancelado' } as Record<string, string>)[status] ?? status;
+  }
+  protected photoFailed(url: string): void {
+    this.failedPhotos.update(current => new Set([...current, url]));
+  }
   protected readonly editId = signal<string | null>(null);
   protected readonly editingAddress = signal(false);
   protected readonly deletingId = signal<string | null>(null);
@@ -52,6 +71,7 @@ export class CustomerAccountComponent {
   protected readonly states = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
   protected readonly profileForm = this.forms.nonNullable.group({
     name: ['', requiredText(150)], phone: ['', [Validators.required, Validators.pattern(/^\d{10,11}$/)]],
+    cpf: ['', [Validators.required, cpfValidator]],
   });
   protected readonly addressForm = this.forms.nonNullable.group({
     recipient: ['', requiredText(150)], postalCode: ['', [Validators.required, Validators.pattern(/^\d{5}-?\d{3}$/)]],
@@ -93,7 +113,7 @@ export class CustomerAccountComponent {
     const request: Observable<unknown> = section === 'perfil'
       ? this.http.get<Profile>('/api/public/customer/profile', { headers: this.headers() }).pipe(tap((profile) => {
           this.profile.set(profile);
-          this.profileForm.reset({ name: profile.name, phone: profile.phone ?? '' });
+          this.profileForm.reset({ name: profile.name, phone: profile.phone ?? '', cpf: profile.cpf ?? '' });
         }))
       : section === 'enderecos'
         ? this.http.get<Address[]>('/api/public/customer/addresses', { headers: this.headers() }).pipe(tap((addresses) => {
@@ -131,10 +151,18 @@ export class CustomerAccountComponent {
     if (this.profileForm.invalid) { this.profileForm.markAllAsTouched(); return; }
     this.busy.set(true); this.error.set(''); this.success.set('');
     const value = this.profileForm.getRawValue();
-    this.http.put<Profile>('/api/public/customer/profile', { name: value.name.trim(), phone: value.phone }, { headers: this.headers() })
+    this.http.put<Profile>('/api/public/customer/profile', { name: value.name.trim(), phone: value.phone, cpf: value.cpf.trim() }, { headers: this.headers() })
       .pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
-        next: (profile) => { this.profile.set(profile); this.profileForm.reset({ name: profile.name, phone: profile.phone ?? '' }); this.editingProfile.set(false); this.success.set('Dados atualizados.'); this.busy.set(false); },
-        error: (error: unknown) => { if (!applyServerFieldErrors(this.profileForm, error)) this.handleError(error); this.busy.set(false); },
+        next: (profile) => { this.profile.set(profile); this.profileForm.reset({ name: profile.name, phone: profile.phone ?? '', cpf: profile.cpf ?? '' }); this.editingProfile.set(false); this.success.set('Dados atualizados.'); this.busy.set(false); },
+        error: (error: unknown) => {
+          if (error instanceof HttpErrorResponse && error.status === 409 && error.error?.code === 'CPF_ALREADY_IN_USE') {
+            this.profileForm.controls.cpf.setErrors({ conflict: true });
+            this.profileForm.controls.cpf.markAsTouched();
+          } else if (!applyServerFieldErrors(this.profileForm, error)) {
+            this.handleError(error);
+          }
+          this.busy.set(false);
+        },
       });
   }
 

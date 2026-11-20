@@ -35,7 +35,7 @@ form .actions { margin-top:15px; }
 input[aria-invalid="true"], textarea[aria-invalid="true"], select[aria-invalid="true"] { border-color:#b7594f; }
 .success { color:#315d42; background:#ecf5eb; }
 .pagination { margin-top:20px; font-size:.8rem; }
-@media(max-width:720px) { .layout { grid-template-columns:1fr; } nav { grid-template-columns:repeat(2,1fr); } .panel { padding:24px; } .title { align-items:flex-start; flex-direction:column; } }
+@media(max-width:720px) { .layout { grid-template-columns:minmax(0,1fr); } nav { grid-template-columns:repeat(2,1fr); } .panel { padding:24px; } .title { align-items:flex-start; flex-direction:column; } }
 .photo { width:110px; height:110px; object-fit:cover; margin:4px; }
 .variant-link { color:#294b40; }
 .card-actions { position:relative; z-index:1; flex-shrink:0; }

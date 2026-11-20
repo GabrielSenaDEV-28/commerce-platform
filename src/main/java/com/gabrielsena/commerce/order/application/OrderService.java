@@ -2,6 +2,7 @@ package com.gabrielsena.commerce.order.application;
 
 import com.gabrielsena.commerce.cart.application.ShoppingCartService;
 import com.gabrielsena.commerce.catalog.CatalogStoreResolver;
+import com.gabrielsena.commerce.catalog.application.ProductPhotoStorage;
 import com.gabrielsena.commerce.customer.application.CustomerAuthService.Customer;
 import com.gabrielsena.commerce.customer.application.CustomerProfileService;
 import com.gabrielsena.commerce.customer.application.CustomerProfileService.Address;
@@ -22,6 +23,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -34,39 +38,50 @@ public class OrderService {
     private final CustomerProfileService profiles;
     private final StoreShippingSettingsService shippingSettings;
     private final ShippingEstimateService estimates;
+    private final ProductPhotoStorage photos;
 
     public OrderService(JdbcTemplate jdbc, ShoppingCartService carts, CatalogStoreResolver stores,
                         CustomerProfileService profiles, StoreShippingSettingsService shippingSettings,
-                        ShippingEstimateService estimates) {
+                        ShippingEstimateService estimates, ProductPhotoStorage photos) {
         this.jdbc = jdbc;
         this.carts = carts;
         this.stores = stores;
         this.profiles = profiles;
         this.shippingSettings = shippingSettings;
         this.estimates = estimates;
+        this.photos = photos;
     }
 
     public enum FulfillmentType { DELIVERY, PICKUP }
+    public static class IncompleteProfile extends RuntimeException {
+        public IncompleteProfile() { super("Complete the customer profile before checkout."); }
+    }
     public record OrderItem(UUID productId, UUID variantId, String name, String color, String size,
                             BigDecimal unitPrice, int quantity) { }
     public record Order(UUID id, UUID reservationId, String customerName, String customerEmail,
                         String status, Instant createdAt, Instant expiresAt, BigDecimal total,
-                        List<OrderItem> items, Delivery delivery, FulfillmentType fulfillmentType, Pickup pickup) { }
+                        List<OrderItem> items, Delivery delivery, FulfillmentType fulfillmentType, Pickup pickup,
+                        String customerCpf, Instant deliveredAt) { }
     public record Shipping(int serviceId, String name, BigDecimal price, int deliveryDays) { }
     public record Delivery(String phone, Address address, Shipping shipping) { }
     public record Pickup(String phone, PickupAddress address, String instructions, BigDecimal cost) { }
     public record OrderSummary(UUID id, String customerName, String customerEmail, String status,
-                               Instant createdAt, Instant expiresAt, BigDecimal total, FulfillmentType fulfillmentType) { }
+                               Instant createdAt, Instant expiresAt, BigDecimal total, FulfillmentType fulfillmentType,
+                               String customerCpf, List<ProductPreview> previews) { }
+    public record ProductPreview(String name, String photo) { }
+    public record Filters(LocalDate startDate, LocalDate endDate, String status, String cpf,
+                          FulfillmentType fulfillmentType, UUID orderId) { }
     private record OrderRow(UUID id, UUID reservationId, UUID customerId, String name, String email, boolean acceptedPartial,
                             UUID addressId, FulfillmentType fulfillmentType, String status, Instant createdAt, Instant expiresAt,
-                            UUID quoteId, Integer serviceId) { }
+                            UUID quoteId, Integer serviceId, String cpf, Instant deliveredAt) { }
 
     private static final String STATUS = """
-            CASE WHEN r.consumed_at IS NOT NULL THEN 'PAID'
+            CASE WHEN o.delivered_at IS NOT NULL THEN 'DELIVERED'
+                 WHEN r.consumed_at IS NOT NULL THEN 'PAID'
                  WHEN EXISTS (SELECT 1 FROM sandbox_pix_payments p WHERE p.order_id = o.order_id
                      AND p.store_id = o.store_id AND p.status = 'REVIEW') THEN 'PAYMENT_REVIEW'
                  WHEN r.cancelled_at IS NOT NULL THEN 'CANCELLED'
-                 WHEN r.expires_at <= statement_timestamp() THEN 'EXPIRED'
+                 WHEN r.expires_at <= statement_timestamp() THEN 'CANCELLED'
                  ELSE 'PENDING' END
             """;
 
@@ -141,8 +156,8 @@ public class OrderService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Partial checkout requires explicit confirmation.");
         }
         var profile = profiles.lockCustomer(store, customer.id());
-        if (profile.phone() == null) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "A customer phone is required.");
+        if (!CustomerProfileService.isCheckoutProfileComplete(profile)) {
+            throw new IncompleteProfile();
         }
         Address address = fulfillmentType == FulfillmentType.DELIVERY ? profiles.get(store, customer.id(), addressId) : null;
         PickupOption pickup = fulfillmentType == FulfillmentType.PICKUP ? shippingSettings.lockAvailablePickup(store) : null;
@@ -165,11 +180,11 @@ public class OrderService {
         UUID id = UUID.randomUUID();
         int inserted = jdbc.update("""
                 INSERT INTO commerce_orders (order_id, store_id, reservation_id, customer_id, customer_name, customer_email,
-                    accepted_partial, fulfillment_type, created_at)
-                SELECT ?, store_id, reservation_id, ?, ?, ?, ?, ?, clock_timestamp()
+                    accepted_partial, fulfillment_type, customer_cpf, created_at)
+                SELECT ?, store_id, reservation_id, ?, ?, ?, ?, ?, ?, clock_timestamp()
                 FROM checkout_reservations WHERE store_id = ? AND cart_id = ? AND reservation_id = ?
                   AND cancelled_at IS NULL AND consumed_at IS NULL AND expires_at > clock_timestamp()
-                """, id, customer.id(), profile.name(), profile.email(), acceptPartial, fulfillmentType.name(), store, cart, reservationId);
+                """, id, customer.id(), profile.name(), profile.email(), acceptPartial, fulfillmentType.name(), profile.cpf(), store, cart, reservationId);
         if (inserted == 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Checkout reservation is not active.");
         }
@@ -242,29 +257,111 @@ public class OrderService {
         return summaries(stores.storeFor(actor), null, page);
     }
 
+    @Transactional(readOnly = true)
+    public Page<OrderSummary> merchantOrders(UUID actor, Pageable page, Filters filters) {
+        return summaries(stores.storeFor(actor), null, page, filters);
+    }
+
+    @Transactional
+    public Order completePickup(UUID actor, UUID id) {
+        UUID store = stores.storeFor(actor);
+        // The order row serializes repeated delivery confirmations without touching payment/stock locks.
+        var ids = jdbc.query("SELECT order_id FROM commerce_orders WHERE store_id = ? AND order_id = ? FOR UPDATE",
+                (rs, row) -> rs.getObject(1, UUID.class), store, id);
+        if (ids.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found.");
+        Order current = order(store, find(store, id, null));
+        if (current.fulfillmentType() != FulfillmentType.PICKUP ||
+                !List.of("PAID", "DELIVERED").contains(current.status())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Only a paid pickup order can be delivered.");
+        }
+        jdbc.update("""
+                UPDATE commerce_orders SET delivered_at = clock_timestamp(), delivered_by = ?
+                WHERE store_id = ? AND order_id = ? AND delivered_at IS NULL
+                """, actor, store, id);
+        return order(store, find(store, id, null));
+    }
+
     private Page<OrderSummary> summaries(UUID store, UUID customer, Pageable page) {
-        String customerFilter = customer == null ? "" : " AND o.customer_id = ?";
-        Object[] countArgs = customer == null ? new Object[]{store} : new Object[]{store, customer};
-        long count = Objects.requireNonNull(jdbc.queryForObject(
-                "SELECT COUNT(*) FROM commerce_orders o WHERE o.store_id = ?" + customerFilter, Long.class, countArgs));
-        Object[] queryArgs = customer == null
-                ? new Object[]{store, page.getPageSize(), page.getOffset()}
-                : new Object[]{store, customer, page.getPageSize(), page.getOffset()};
-        List<OrderSummary> result = jdbc.query("""
-                SELECT o.order_id, o.customer_name, o.customer_email, o.fulfillment_type, %s AS status, o.created_at, r.expires_at,
-                    (SELECT SUM(i.unit_price * i.quantity) FROM commerce_order_items i
-                     WHERE i.store_id = o.store_id AND i.order_id = o.order_id)
-                     + COALESCE(s.price, 0) AS total
+        return summaries(store, customer, page, null);
+    }
+
+    private Page<OrderSummary> summaries(UUID store, UUID customer, Pageable page, Filters filters) {
+        StringBuilder where = new StringBuilder(" WHERE o.store_id = ?");
+        List<Object> args = new ArrayList<>();
+        args.add(store);
+        if (customer != null) {
+            where.append(" AND o.customer_id = ? AND (" + STATUS + ") <> 'CANCELLED'");
+            args.add(customer);
+        }
+        if (filters != null) {
+            if (filters.startDate() != null && filters.endDate() != null && filters.startDate().isAfter(filters.endDate())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid date range.");
+            }
+            ZoneId zone = ZoneId.of("America/Sao_Paulo");
+            if (filters.startDate() != null) {
+                where.append(" AND o.created_at >= ?"); args.add(java.sql.Timestamp.from(filters.startDate().atStartOfDay(zone).toInstant()));
+            }
+            if (filters.endDate() != null) {
+                where.append(" AND o.created_at < ?"); args.add(java.sql.Timestamp.from(filters.endDate().plusDays(1).atStartOfDay(zone).toInstant()));
+            }
+            if (filters.status() != null && !filters.status().isBlank()) {
+                if (!List.of("PENDING", "PAID", "CANCELLED", "PAYMENT_REVIEW", "DELIVERED").contains(filters.status())) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid status.");
+                }
+                where.append(" AND (" + STATUS + ") = ?"); args.add(filters.status());
+            }
+            if (filters.cpf() != null && !filters.cpf().isBlank()) {
+                String cpf = filters.cpf().replace(".", "").replace("-", "");
+                if (!cpf.matches("[0-9]{11}")) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid CPF filter.");
+                where.append(" AND o.customer_cpf = ?"); args.add(cpf);
+            }
+            if (filters.fulfillmentType() != null) { where.append(" AND o.fulfillment_type = ?"); args.add(filters.fulfillmentType().name()); }
+            if (filters.orderId() != null) { where.append(" AND o.order_id = ?"); args.add(filters.orderId()); }
+        }
+        String from = """
                 FROM commerce_orders o JOIN checkout_reservations r
                   ON r.store_id = o.store_id AND r.reservation_id = o.reservation_id
                 LEFT JOIN order_shipping_details s ON s.store_id = o.store_id AND s.order_id = o.order_id
-                WHERE o.store_id = ?
-                """.formatted(STATUS) + customerFilter + " ORDER BY o.created_at DESC, o.order_id DESC LIMIT ? OFFSET ?",
+                """;
+        long count = Objects.requireNonNull(jdbc.queryForObject("SELECT COUNT(*) " + from + where, Long.class, args.toArray()));
+        args.add(page.getPageSize()); args.add(page.getOffset());
+        List<OrderSummary> result = jdbc.query("""
+                SELECT o.order_id, o.customer_name, o.customer_email, o.customer_cpf, o.fulfillment_type, %s AS status, o.created_at, r.expires_at,
+                    (SELECT SUM(i.unit_price * i.quantity) FROM commerce_order_items i
+                     WHERE i.store_id = o.store_id AND i.order_id = o.order_id)
+                     + COALESCE(s.price, 0) AS total, preview.names AS preview_names, preview.keys AS preview_keys
+                """.formatted(STATUS) + from + """
+                LEFT JOIN LATERAL (
+                    SELECT array_agg(product.name ORDER BY product.product_id) AS names,
+                           array_agg(cover.object_key ORDER BY product.product_id) AS keys
+                    FROM (
+                        SELECT i.product_id, MIN(i.product_name) AS name
+                        FROM commerce_order_items i WHERE i.store_id = o.store_id AND i.order_id = o.order_id
+                        GROUP BY i.product_id ORDER BY i.product_id LIMIT 4
+                    ) product
+                    LEFT JOIN LATERAL (
+                        SELECT ph.object_key FROM catalog_product_photos ph
+                        WHERE ph.store_id = o.store_id AND ph.product_id = product.product_id AND ph.status = 'READY'
+                        ORDER BY ph.position, ph.photo_id LIMIT 1
+                    ) cover ON true
+                ) preview ON true
+                """ + where + " ORDER BY o.created_at DESC, o.order_id DESC LIMIT ? OFFSET ?",
                 (rs, row) -> new OrderSummary(rs.getObject("order_id", UUID.class),
                 rs.getString("customer_name"), rs.getString("customer_email"), rs.getString("status"),
                 rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("expires_at").toInstant(),
-                rs.getBigDecimal("total"), FulfillmentType.valueOf(rs.getString("fulfillment_type"))), queryArgs);
+                rs.getBigDecimal("total"), FulfillmentType.valueOf(rs.getString("fulfillment_type")), rs.getString("customer_cpf"),
+                previews(rs)), args.toArray());
         return new PageImpl<>(result, page, count);
+    }
+
+    private List<ProductPreview> previews(java.sql.ResultSet rs) throws java.sql.SQLException {
+        String[] names = (String[]) rs.getArray("preview_names").getArray();
+        String[] keys = (String[]) rs.getArray("preview_keys").getArray();
+        List<ProductPreview> result = new ArrayList<>();
+        for (int i = 0; i < names.length; i++) {
+            result.add(new ProductPreview(names[i], keys[i] == null ? null : photos.url(keys[i])));
+        }
+        return List.copyOf(result);
     }
 
     private OrderRow find(UUID store, UUID id, UUID cart) {
@@ -280,7 +377,7 @@ public class OrderService {
     private List<OrderRow> rows(String where, Object... args) {
         return jdbc.query("""
                 SELECT o.order_id, o.reservation_id, o.customer_id, o.customer_name, o.customer_email, o.accepted_partial, d.address_id, o.fulfillment_type,
-                       s.quote_id, s.service_id,
+                       s.quote_id, s.service_id, o.customer_cpf, o.delivered_at,
                        %s AS status, o.created_at, r.expires_at
                 FROM commerce_orders o JOIN checkout_reservations r
                   ON r.store_id = o.store_id AND r.reservation_id = o.reservation_id
@@ -291,7 +388,8 @@ public class OrderService {
                 rs.getString("customer_email"), rs.getBoolean("accepted_partial"), rs.getObject("address_id", UUID.class),
                 FulfillmentType.valueOf(rs.getString("fulfillment_type")), rs.getString("status"),
                 rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("expires_at").toInstant(),
-                rs.getObject("quote_id", UUID.class), rs.getObject("service_id", Integer.class)), args);
+                rs.getObject("quote_id", UUID.class), rs.getObject("service_id", Integer.class),
+                rs.getString("customer_cpf"), rs.getTimestamp("delivered_at") == null ? null : rs.getTimestamp("delivered_at").toInstant()), args);
     }
 
     private Order order(UUID store, OrderRow row) {
@@ -327,6 +425,7 @@ public class OrderService {
                 store, row.id());
         return new Order(row.id(), row.reservationId(), row.name(), row.email(), row.status(),
                 row.createdAt(), row.expiresAt(), total, items, details.isEmpty() ? null : details.getFirst(),
-                row.fulfillmentType(), pickups.isEmpty() ? null : pickups.getFirst());
+                row.fulfillmentType(), pickups.isEmpty() ? null : pickups.getFirst(),
+                row.cpf(), row.deliveredAt());
     }
 }

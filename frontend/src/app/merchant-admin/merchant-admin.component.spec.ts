@@ -18,7 +18,7 @@ describe('merchant administration', () => {
     params.next(convertToParamMap({ section: 'categorias' }));
     TestBed.configureTestingModule({ providers: [
       provideRouter([]), provideHttpClient(), provideHttpClientTesting(),
-      { provide: ActivatedRoute, useValue: { paramMap: params, snapshot: { queryParamMap: convertToParamMap({}) } } },
+      { provide: ActivatedRoute, useValue: { paramMap: params, snapshot: { data: {}, paramMap: convertToParamMap({}), queryParamMap: convertToParamMap({}) } } },
     ] });
     TestBed.overrideComponent(MerchantAdminComponent, { add: { providers: [
       { provide: DOCUMENT, useValue: { location: { hostname: 'loja.localhost', protocol: 'http:', port: '4200' } } },
@@ -144,14 +144,16 @@ describe('merchant administration', () => {
     expect(fixture.nativeElement.querySelector('.ui-record-actions button').textContent).toContain('Editar');
   });
 
-  it('shows order list and explicitly labels future features', () => {
+  it('links directly to the full order page without a sidebar chevron and labels future features', () => {
     const { fixture, store } = setup();
     store.flush({ name: 'Loja', subdomain: 'loja' });
     request('/api/item-types').flush({ content: [], page: 0, totalPages: 0, totalElements: 0 });
-    params.next(convertToParamMap({ section: 'pedidos' }));
-    request('/api/orders').flush({ content: [{ id: 'p1', customerName: 'Ana', total: 25, status: 'PENDING', createdAt: '2026-01-01T10:00:00Z' }], page: 0, totalPages: 1, totalElements: 1 });
     fixture.detectChanges();
-    expect(fixture.nativeElement.textContent).toContain('Pendente');
+    const link = fixture.nativeElement.querySelector('aside a[href="/painel/pedidos"]');
+    expect(link.textContent.trim()).toBe('Pedidos');
+    expect(link.querySelector('span')).toBeNull();
+    expect(fixture.nativeElement.querySelector('app-merchant-orders')).toBeNull();
+    expect(fixture.nativeElement.querySelector('aside a[appBack]')).toBeNull();
     params.next(convertToParamMap({ section: 'vendas' }));
     fixture.detectChanges();
     expect(fixture.nativeElement.textContent).toContain('ainda não estão disponíveis');

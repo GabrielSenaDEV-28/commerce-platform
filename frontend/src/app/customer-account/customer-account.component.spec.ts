@@ -15,7 +15,7 @@ describe('customer account', () => {
   let harness: RouterTestingHarness;
   let http: HttpTestingController;
   let auth: AuthService;
-  const profile = { name: 'Ana', email: 'ana@example.com', phone: null };
+  const profile = { name: 'Ana', email: 'ana@example.com', phone: null, cpf: null };
   const address = { id: 'address-1', recipient: 'Ana', postalCode: '01001000', street: 'Rua A',
     number: '10', complement: '', district: 'Centro', city: 'São Paulo', state: 'SP', country: 'BR' };
 
@@ -76,6 +76,7 @@ describe('customer account', () => {
     request('/api/public/customer/profile').flush(profile);
     harness.detectChanges();
     expect(text()).toContain('Dados pessoais');
+    expect(text()).toContain('Dados pendentes: telefone, CPF');
     expect(harness.routeNativeElement!.querySelector('nav[aria-label="Menu da conta"] a[href="/conta/pagamentos"]')?.textContent).toContain('Meios de pagamento');
     expect(harness.routeNativeElement!.querySelector('.sidebar a[href="/favoritos"]')).toBeNull();
     fill('#profile-name', 'Ana Silva');
@@ -84,15 +85,28 @@ describe('customer account', () => {
     http.expectNone('/api/public/customer/profile');
     expect(text()).toContain('10 ou 11 dígitos');
     fill('#profile-phone', '11987654321');
+    fill('#profile-cpf', '000.000.000-00');
+    submit();
+    http.expectNone('/api/public/customer/profile');
+    expect(text()).toContain('Informe um CPF válido');
+    fill('#profile-cpf', '529.982.247-25');
     submit();
     const save = request('/api/public/customer/profile');
     expect(save.request.method).toBe('PUT');
-    expect(save.request.body).toEqual({ name: 'Ana Silva', phone: '11987654321' });
-    save.flush({ ...profile, name: 'Ana Silva', phone: '11987654321' });
+    expect(save.request.body).toEqual({ name: 'Ana Silva', phone: '11987654321', cpf: '529.982.247-25' });
+    save.flush({ code: 'CPF_ALREADY_IN_USE' }, { status: 409, statusText: 'Conflict' });
+    harness.detectChanges();
+    expect(text()).toContain('Este CPF já pertence a uma conta nesta loja');
+    fill('#profile-cpf', '168.995.350-09');
+    submit();
+    request('/api/public/customer/profile').flush({ ...profile, name: 'Ana Silva', phone: '11987654321', cpf: '16899535009' });
     harness.detectChanges();
     expect(text()).toContain('Dados atualizados');
     expect(harness.routeNativeElement!.querySelector('#profile-name')).toBeNull();
     expect(text()).toContain('Ana Silva');
+    expect(text()).toContain('CPF informado');
+    expect(text()).not.toContain('Dados pendentes');
+    expect(text()).not.toContain('16899535009');
   });
 
   it('creates, edits and explicitly confirms deletion of an address', async () => {
@@ -161,6 +175,28 @@ describe('customer account', () => {
     http.expectOne((req) => req.url === '/api/public/catalog/products').flush({ content: [], page: 0, totalPages: 0, totalElements: 0 });
     http.expectOne('/api/public/cart/customer').flush({ token: 'customer-cart', cart: { items: [] } });
     expect(TestBed.inject(Router).url).toBe('/');
+  });
+  it('shows a corner badge and single/product mosaic previews without a full-width status strip', async () => {
+    signIn();
+    await harness.navigateByUrl('/conta/pedidos', CustomerAccountComponent);
+    const previews = ['Blusa', 'Calça', 'Saia', 'Vestido'].map((name, index) => ({ name, photo: `/image-${index}.png` }));
+    request('/api/public/customer/orders?page=0&size=10').flush({ content: [
+      { id: 'one', status: 'PAID', createdAt: '2026-01-01T10:00:00Z', total: 45, fulfillmentType: 'PICKUP', previews: previews.slice(0, 1) },
+      { id: 'many', status: 'DELIVERED', createdAt: '2026-01-01T10:00:00Z', total: 95, fulfillmentType: 'DELIVERY', previews },
+      { id: 'none', status: 'PENDING', createdAt: '2026-01-01T10:00:00Z', total: 30, fulfillmentType: 'PICKUP', previews: [{ name: 'Sem foto', photo: null }] },
+    ], page: 0, totalPages: 1 });
+    harness.detectChanges();
+    const cards = harness.routeNativeElement!.querySelectorAll('.customer-order');
+    expect(cards[0].querySelector('.order-badge.paid')!.textContent).toBe('Pago');
+    expect(cards[0].querySelector('.status')).toBeNull();
+    expect(cards[0].querySelectorAll('img').length).toBe(1);
+    expect(cards[0].querySelector('.mosaic')).toBeNull();
+    expect(cards[1].querySelectorAll('.mosaic img').length).toBe(4);
+    expect(cards[2].querySelector('[aria-label="Sem foto — imagem indisponível"]')).not.toBeNull();
+    expect(cards[0].querySelector('a')!.getAttribute('href')).toBe('/conta/pedidos/one');
+    cards[0].querySelector('img')!.dispatchEvent(new Event('error')); harness.detectChanges();
+    expect(cards[0].querySelector('img')).toBeNull();
+    expect(cards[0].querySelector('[aria-label="Blusa — imagem indisponível"]')).not.toBeNull();
   });
 
   it('reports an expired session and allows logout', async () => {

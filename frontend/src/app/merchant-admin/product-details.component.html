@@ -1,5 +1,5 @@
 <div class="admin">
-  <header><a routerLink="/" class="brand">c. <span>commerce</span></a><span>{{ variantId ? 'GESTÃO DE VARIANTE' : 'GESTÃO DE PRODUTO' }}</span><a [routerLink]="variantId ? ['/painel/produtos', id] : ['/painel/produtos']">{{ variantId ? 'Voltar ao produto' : 'Voltar aos produtos' }}</a></header>
+  <header><a routerLink="/" class="brand">c. <span>commerce</span></a><span>{{ variantId ? 'GESTÃO DE VARIANTE' : 'GESTÃO DE PRODUTO' }}</span><a appBack [routerLink]="variantId ? ['/painel/produtos', id] : ['/painel/produtos']" [attr.aria-label]="variantId ? 'Voltar ao produto' : 'Voltar aos produtos'" [title]="variantId ? 'Voltar ao produto' : 'Voltar aos produtos'">{{ variantId ? 'Voltar ao produto' : 'Voltar aos produtos' }}</a></header>
   <main>
     <nav class="breadcrumbs" aria-label="Navegação estrutural">
       <a routerLink="/painel/produtos">Produtos</a><span aria-hidden="true">/</span>
