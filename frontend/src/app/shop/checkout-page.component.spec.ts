@@ -25,7 +25,7 @@ describe('checkout review', () => {
     http.expectOne('/api/public/store-auth/session/login').flush({ accountKind: 'customer', identity: 'customer-id', accessToken: 'access', refreshToken: 'r', expiresIn: 900 });
   });
   afterEach(() => { http.verify(); vi.restoreAllMocks(); vi.useRealTimers(); });
-  function setup(options: { phone?: string | null; pickup?: boolean; empty?: boolean; singleAddress?: boolean } = {}) {
+  function setup(options: { phone?: string | null; cpf?: string | null; pickup?: boolean; empty?: boolean; singleAddress?: boolean } = {}) {
     if (!options.empty) {
       TestBed.inject(CartService).add('p1', 'v1', 2).subscribe();
       http.expectOne('/api/public/cart/customer').flush({ token: 'opaque', cart: { items: [] } });
@@ -33,7 +33,7 @@ describe('checkout review', () => {
       http.expectOne('/api/public/cart/items/p1/v1').flush(cart);
     }
     const fixture = TestBed.createComponent(CheckoutPageComponent);
-    http.expectOne('/api/public/customer/profile').flush({ name: 'Cliente', email: 'customer@example.com', phone: options.phone === undefined ? '11987654321' : options.phone });
+    http.expectOne('/api/public/customer/profile').flush({ name: 'Cliente', email: 'customer@example.com', cpf: options.cpf === undefined ? '52998224725' : options.cpf, phone: options.phone === undefined ? '11987654321' : options.phone });
     http.expectOne('/api/public/customer/addresses').flush(options.singleAddress ? [address] : [address, { ...address, id: 'a2', postalCode: '20010000' }]);
     http.expectOne('/api/public/pickup').flush({ available: options.pickup ?? false, address: options.pickup ? address : null, instructions: 'Aguarde a loja.' });
     if (!options.empty) http.expectOne('/api/public/cart').flush(cart);
@@ -68,6 +68,26 @@ describe('checkout review', () => {
     const fixture = setup({ empty: true });
     expect(fixture.nativeElement.textContent).toContain('Sua sacola está vazia');
     http.expectNone('/api/public/cart'); http.expectNone('/api/public/checkout');
+  });
+  it('blocks a legacy customer without CPF and links to profile completion', () => {
+    const fixture = setup({ cpf: null });
+    expect(button(fixture, 'Conferir e reservar').disabled).toBe(true);
+    expect(fixture.nativeElement.textContent).toContain('CPF válido');
+    http.expectNone('/api/public/checkout');
+  });
+  it('shows expiry acknowledgment before returning home and clears the ended checkout', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T10:00:00Z'));
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
+    const fixture = setup();
+    start(fixture, false, '2026-01-01T10:00:01Z');
+    vi.advanceTimersByTime(1001);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('dialog')).not.toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
+    fixture.nativeElement.querySelector('dialog button').click();
+    expect(navigate).toHaveBeenCalledWith('/');
+    expect(TestBed.inject(CheckoutService).reservation()).toBeNull();
   });
   it('uses reservation prices, validates fields locally, and creates a delivery order only after selection', async () => {
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
@@ -236,7 +256,7 @@ describe('checkout review', () => {
     service.order.set({ id: 'old-order', reservationId: 'old', customerName: 'Cliente', customerEmail: 'customer@example.com', status: 'EXPIRED', createdAt: '2000-01-01T00:00:00Z', expiresAt: '2000-01-01T00:20:00Z', total: 0, items: [], fulfillmentType: 'PICKUP', delivery: null, pickup: null });
     fixture.detectChanges();
     button(fixture, 'Conferir sacola para um novo pedido').click();
-    http.expectOne('/api/public/customer/profile').flush({ name: 'Cliente', email: 'customer@example.com', phone: '11987654321' });
+    http.expectOne('/api/public/customer/profile').flush({ name: 'Cliente', email: 'customer@example.com', phone: '11987654321', cpf: '52998224725' });
     http.expectOne('/api/public/customer/addresses').flush([]);
     http.expectOne('/api/public/pickup').flush({ available: false, address: null });
     http.expectOne('/api/public/cart').flush(cart); fixture.detectChanges();

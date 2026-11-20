@@ -106,8 +106,8 @@ export class AuthService {
       map((tokens) => tokens.accountKind),
     );
   }
-  registerCustomer(name: string, email: string, password: string): Observable<void> {
-    return this.browserRequest<BrowserSession>('register', { name, email, password }).pipe(
+  registerCustomer(name: string, email: string, password: string, cpf: string): Observable<void> {
+    return this.browserRequest<BrowserSession>('register', { name, email, password, cpf }).pipe(
       tap((tokens) => {
         this.generation++;
         this.startSession(tokens.accountKind, tokens, tokens.identity, true);

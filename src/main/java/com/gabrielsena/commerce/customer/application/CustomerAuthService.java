@@ -8,6 +8,7 @@ import com.gabrielsena.commerce.auth.application.RegisterMerchant;
 import com.gabrielsena.commerce.auth.application.StoreAccountIdentity;
 import com.gabrielsena.commerce.security.OpaqueTokens;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -49,15 +50,32 @@ public class CustomerAuthService {
 
     @Transactional
     public Customer register(UUID store, String name, String email, String password) {
+        return insertCustomer(store, name, email, password, null);
+    }
+
+    @Transactional
+    public Customer register(UUID store, String name, String email, String password, String cpf) {
+        return insertCustomer(store, name, email, password, Cpf.normalize(cpf));
+    }
+
+    private Customer insertCustomer(UUID store, String name, String email, String password, String cpf) {
         UUID id = UUID.randomUUID();
         String normalized = normalize(email);
         if (identities.lockForRegistration(store, normalized).merchant()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "An account already exists for the supplied email.");
         }
-        int created = jdbc.update("""
-                INSERT INTO customer_accounts (customer_id, store_id, name, email, password_hash)
-                VALUES (?, ?, ?, ?, ?) ON CONFLICT (store_id, email) DO NOTHING
-                """, id, store, name.strip(), normalized, passwords.encode(password));
+        int created;
+        try {
+            created = jdbc.update("""
+                    INSERT INTO customer_accounts (customer_id, store_id, name, email, password_hash, cpf)
+                    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (store_id, email) DO NOTHING
+                    """, id, store, name.strip(), normalized, passwords.encode(password), cpf);
+        } catch (DuplicateKeyException exception) {
+            if (cpf == null) {
+                throw exception;
+            }
+            throw Cpf.alreadyInUse();
+        }
         if (created == 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "An account already exists for the supplied email.");
         }

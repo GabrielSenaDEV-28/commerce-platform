@@ -160,7 +160,8 @@ reservation prices, selects a saved delivery address and reserved-item shipping
 service or available store pickup, and creates a pending order. Partial orders
 require explicit consent. Profile/address editing reuses existing account screens
 with a return link. Order cards open authenticated, owner-scoped details with
-server snapshots and a manual status refresh. Opt-in sandbox Pix is available
+server snapshots and automatic status checks every 20 seconds while open,
+with explicit retry after a failed check. Opt-in sandbox Pix is available
 for testing; production payments and installments are not supported. Pre-checkout shipping estimates
 require configured shipping integration and variant measurements, do not
 reserve stock and are invalidated when their inputs change.
@@ -175,8 +176,31 @@ The initial merchant interface is available on the store's local hostname and
 verifies ownership before presenting administration. It supports initial
 item-type and product management, variant creation, variant pricing, stock
 entries, paginated stock history, photo preview/upload/removal/cover selection
-and a paginated order list. Color and size suggestions
-can be added per store. Order filters remain outside that interface. Sales
+and a full-width order page, outside the account sidebar, with a dedicated table
+of 50 orders per page. Customer orders also open a full-width page like favorites.
+Order menu links navigate directly without an account-panel chevron. Order pages
+use breadcrumbs for return navigation, without a separate back icon in the
+heading; the administration menu has no back-to-store icon. Color and size suggestions
+can be added per store. Order management defaults to the current Monday-Sunday
+week in Brasilia, with inclusive initial/final dates, status, exact CPF,
+delivery/store pickup and full order ID filters. The filtered count and pages
+use the same server predicates. Date/status/fulfillment changes filter immediately;
+CPF/order ID typing uses a short debounce. There is no apply button, and a changed
+filter cancels obsolete list requests and returns to the first page. The paginator
+shows the visible record range and compact page controls, not a placeholder label.
+Selecting a row opens owner-scoped order details:
+items, customer/contact snapshots, address, carrier service, freight and total.
+Merchant details highlight the authoritative order total in the top-right summary.
+Customer order cards show a compact top-right status badge and a thumbnail/mosaic
+of up to four distinct products. Summary responses include snapshot product names
+and current READY cover-photo URLs from the same store, not extra per-card catalog
+requests. Removed/missing images use a placeholder; photos are not historical
+order snapshots and may change when the merchant changes the cover.
+Paid store-pickup orders can be marked delivered after explicit confirmation.
+Delivery confirmation is store-scoped, audited and idempotent; it does not
+repeat payment settlement or deduct stock again. Details refresh automatically
+every 20 seconds, paused during delivery confirmation or after a failed check.
+Sales
 analytics, promotions, staff permissions and branding are not implemented.
 Editable forms warn before discarding changes, and writes block internal
 navigation until completion. Stock and price updates preserve other unsaved
@@ -184,10 +208,32 @@ variant fields. Product/variant breadcrumbs and a dedicated not-found page
 complete navigation. The decisions and failure-recovery behavior are recorded
 in `frontend/README.md` under "Decisões de acabamento".
 
+New customer registrations require CPF; legacy accounts retain their existing
+data and must complete name, phone and valid CPF before starting a new checkout.
+Profile/checkout notices link to completion, and the server enforces the same
+requirement. CPF is normalized, validated by check digits and unique per store;
+this is not identity verification. New orders snapshot CPF; legacy orders
+without it remain accessible internally and do not match CPF filters.
+CPF filters are not persisted in browser URLs.
+
+Unpaid orders whose reservation deadline expires are treated as canceled and
+excluded from the customer's order list/count, not deleted from merchant records.
+On an active checkout/order screen, expiry requires an acknowledgment dialog
+before returning home. An order screen consults the server/payment state before
+showing cancellation; paid, delivered and payment-review orders are not hidden
+or presented as expired. A late payment after stock release remains under review.
+The prominent sandbox warnings are replaced by a discreet test-mode badge;
+sandbox Pix must still not be paid through a bank.
+
 ### Mobile navigation, product actions and local favorites
 
 The storefront keeps a sticky header across routes, with a stronger background
-and shadow on scroll. On desktop, navigation is centered and the account icon
+and shadow on scroll. Login hides account, favorites and bag actions. From the
+home page, "Explorar produtos" scrolls smoothly to the collection without
+reloading or navigating, including repeated clicks and the mobile menu.
+Reduced-motion preferences disable the smooth animation. From other pages,
+the link retains router navigation to the home collection.
+On desktop, navigation is centered and the account icon
 links directly to the account page. Account, favorites and bag icons fill on
 hover and stay filled for the current section. At widths up to 720px, the header
 switches to compact navigation with a left-hand menu trigger. The shared
@@ -424,7 +470,7 @@ These legacy JSON-token endpoints are not the Angular browser session flow.
 
 The Angular application uses `POST /api/public/store-auth/session/login`,
 `/register`, `/refresh` and `/logout` on the same origin as the storefront.
-Login accepts `{email,password}`; register accepts `{name,email,password}` and
+Login accepts `{email,password}`; register accepts `{name,email,password,cpf}` and
 creates a signed-in customer. Refresh and logout need no request body. Login
 and refresh return 200, registration 201 and logout 204.
 Successful login/register/refresh return
@@ -1107,8 +1153,11 @@ independently in different stores, while email uniqueness within a store is
 case-insensitive. All customer authentication endpoints resolve the store
 from the hostname and use HTTPS in production:
 
-- `POST /api/public/customer-auth/register`: `name`, `email`, and `password`
-  (12–128 characters); returns `201` or `409` for a duplicate email.
+- `POST /api/public/customer-auth/register`: `name`, `email`, `cpf`, and
+  `password` (12–128 characters); returns `201` or `409` for duplicate email or
+  CPF within the store. CPF accepts 11 digits or the standard punctuation;
+  it is stored as digits after checking both check digits and rejecting repeated
+  digits. These checks do not verify identity, CPF ownership, or registration status.
 - `POST /api/public/customer-auth/login`: `email` and `password`; returns an
   access token and a refresh token.
 - `POST /api/public/customer-auth/refresh`: `refreshToken`; rotates the refresh
@@ -1132,11 +1181,12 @@ that its email address is controlled by the account owner.
 #### Customer profile and delivery addresses
 
 The authenticated customer can read `GET /api/public/customer/profile` and
-update `PUT /api/public/customer/profile` with `{"name":"Ana",
-"phone":"11987654321"}`. Phone must contain 10 or 11 digits (Brazilian area
-code and number); no external verification is performed. Email changes and
-CPF are not implemented. Existing accounts may have a null phone, but need
-to provide one before creating a new order.
+update `PUT /api/public/customer/profile` with `name`, `phone`, and `cpf`.
+Phone must contain 10 or 11 digits (Brazilian area code and number); no external
+verification is performed. Email changes are not implemented. Existing accounts
+may have a null phone or CPF and see a profile completion notice. The server
+requires name, phone, and CPF before creating a new order, which keeps a snapshot
+of the CPF at creation. Legacy orders are not backfilled.
 
 `/api/public/customer/addresses` supports `GET` and `POST`; the
 `/{addressId}` path supports `GET`, `PUT`, and `DELETE`. Each customer can

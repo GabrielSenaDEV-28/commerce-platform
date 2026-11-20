@@ -66,8 +66,8 @@ public class StoreBrowserSessions {
     }
 
     @Transactional
-    public Session register(UUID store, String name, String email, String password) {
-        var customer = customers.register(store, name, email, password);
+    public Session register(UUID store, String name, String email, String password, String cpf) {
+        var customer = customers.register(store, name, email, password, cpf);
         return start(store, CUSTOMER, customer.id(), customers.accessToken(store, customer.id()));
     }
 

@@ -50,7 +50,7 @@ public class StoreSessionController {
     public ResponseEntity<SessionResponse> register(HttpServletRequest request,
                                                     @Valid @RequestBody Registration body) {
         var session = sessions.register(stores.resolve(request.getServerName()), body.name(), body.email(),
-                body.password());
+                body.password(), body.cpf());
         return respond(request, HttpStatus.CREATED, session);
     }
 
@@ -94,7 +94,7 @@ public class StoreSessionController {
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<ProblemDetail> handleStatus(ResponseStatusException exception) {
         return ResponseEntity.status(exception.getStatusCode()).cacheControl(CacheControl.noStore())
-                .body(ProblemDetail.forStatusAndDetail(exception.getStatusCode(), exception.getReason()));
+                .body(exception.getBody());
     }
 
     private ResponseEntity<SessionResponse> respond(HttpServletRequest request, HttpStatus status,

@@ -248,8 +248,14 @@ docker compose watch --no-up
 
 Open `http://<subdomínio-da-loja>.localhost:4200`, sign in as a customer, and
 place an order for an in-stock item with a positive total. On the order page,
-click **Gerar Pix de teste**, wait a few seconds, then click **Atualizar estado
-do pedido**. Mercado Pago's [Pix test flow](https://www.mercadopago.com.br/developers/pt/docs/checkout-api-orders/integration-test/pix)
+click **Gerar Pix de teste** and wait for automatic confirmation checks, performed
+every 20 seconds while the order page is open. If a check fails, use **Tentar
+novamente**. Copying the code is not
+a payment action. The test payer's `first_name=APRO` requests automatic sandbox
+approval; there is no local button that marks an order paid without provider
+confirmation. If still pending, wait for another check before expiry rather than
+issuing another Pix. Expired attempts cannot be restarted to extend the timer.
+Mercado Pago's [Pix test flow](https://www.mercadopago.com.br/developers/pt/docs/checkout-api-orders/integration-test/pix)
 simulates approval automatically. **Do not scan or pay the QR with a banking app.**
 A reservation made at 14:00 with a Pix issued at 14:05 ends at 14:35, not
 15:00. Reload, retry, and status refresh do not restart the timer. A confirmation
@@ -263,7 +269,7 @@ configure `https://<test-host>/api/public/payments/mercado-pago/webhook`, enable
 the **Orders** topic, and save. Copy the signing secret to
 `MERCADO_PAGO_WEBHOOK_SECRET` in the same `.env` and apply the Compose commands
 above. Leave the secret unset to keep the webhook disabled while testing via
-manual refresh.
+the order page's automatic status checks.
 
 ## Operations and data persistence
 

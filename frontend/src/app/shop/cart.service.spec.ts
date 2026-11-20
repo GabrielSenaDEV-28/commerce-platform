@@ -182,7 +182,7 @@ describe('shopping cart', () => {
   });
   it('merges on authenticated registration and hides the owned bag on logout', () => {
     create();
-    TestBed.inject(AuthService).registerCustomer('Customer', 'customer@example.com', 'password').subscribe();
+    TestBed.inject(AuthService).registerCustomer('Customer', 'customer@example.com', 'password', '52998224725').subscribe();
     http.expectOne('/api/public/store-auth/session/register').flush({ accountKind: 'customer', identity: 'customer-id', accessToken: 'access', expiresIn: 900 });
     cart.load().subscribe();
     const merge = http.expectOne('/api/public/cart/customer');

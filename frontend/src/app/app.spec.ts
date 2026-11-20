@@ -159,7 +159,7 @@ describe('login routes', () => {
   it('blocks leaving while registration is being saved', async () => {
     vi.spyOn(window, 'alert').mockImplementation(() => undefined);
     await harness.navigateByUrl('/cadastro', RegisterComponent);
-    fill('#name', 'Cliente'); fill('#email', 'customer@example.com');
+    fill('#name', 'Cliente'); fill('#email', 'customer@example.com'); fill('#cpf', '52998224725');
     fill('#password', 'password1234'); fill('#confirmPassword', 'password1234'); submit();
     const request = http.expectOne('/api/public/store-auth/session/register');
     await harness.navigateByUrl('/entrar');

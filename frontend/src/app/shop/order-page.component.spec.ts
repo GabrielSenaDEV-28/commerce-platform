@@ -3,7 +3,8 @@ import localePt from '@angular/common/locales/pt';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
+import { vi } from 'vitest';
 import { AuthService } from '../auth/auth.service';
 import { OrderPageComponent } from './order-page.component';
 
@@ -27,7 +28,42 @@ describe('owned order details', () => {
     TestBed.inject(AuthService).loginStore('customer@example.com', 'password').subscribe();
     http.expectOne('/api/public/store-auth/session/login').flush({ accountKind: 'customer', identity: 'customer-id', accessToken: 'access', refreshToken: 'r', expiresIn: 900 });
   });
-  afterEach(() => http.verify());
+  afterEach(() => { http.verify(); vi.restoreAllMocks(); vi.useRealTimers(); });
+  it('reconciles payment at the deadline before showing cancellation and returns home only after acknowledgment', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T10:19:59Z'));
+    Object.defineProperty(HTMLDialogElement.prototype, 'showModal', {
+      configurable: true, value: vi.fn(function(this: HTMLDialogElement) { this.open = true; }),
+    });
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
+    const fixture = TestBed.createComponent(OrderPageComponent);
+    http.expectOne('/api/public/customer/orders/o1').flush(order);
+    http.expectOne(pixUrl).flush(disabled);
+    fixture.detectChanges();
+    vi.advanceTimersByTime(1001);
+    http.expectOne('/api/public/customer/orders/o1').flush({ ...order, status: 'CANCELLED' });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('dialog')).toBeNull();
+    http.expectOne(pixUrl).flush({ ...disabled, enabled: true, status: 'EXPIRED' });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('dialog')).not.toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
+    fixture.nativeElement.querySelector('dialog button').click();
+    expect(navigate).toHaveBeenCalledWith('/');
+  });
+  it.each(['PAID', 'DELIVERED', 'PAYMENT_REVIEW'])('never shows the expiry dialog for %s', (status) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T10:19:59Z'));
+    const fixture = TestBed.createComponent(OrderPageComponent);
+    http.expectOne('/api/public/customer/orders/o1').flush({ ...order, status });
+    http.expectOne(pixUrl).flush({ ...disabled, enabled: true, status: status === 'PAYMENT_REVIEW' ? 'REVIEW' : 'PAID' });
+    fixture.detectChanges();
+    vi.advanceTimersByTime(2000);
+    fixture.detectChanges();
+    http.expectNone('/api/public/customer/orders/o1');
+    expect(fixture.nativeElement.querySelector('dialog')).toBeNull();
+    if (status === 'DELIVERED') expect(fixture.nativeElement.textContent).toContain('Entregue');
+  });
   it('fetches the authenticated owner endpoint and uses server snapshots and total', () => {
     const fixture = TestBed.createComponent(OrderPageComponent);
     const get = http.expectOne('/api/public/customer/orders/o1');
@@ -38,7 +74,16 @@ describe('owned order details', () => {
     expect(fixture.nativeElement.textContent).toContain('Blusa Azul M');
     expect(fixture.nativeElement.querySelector('.total').textContent).toContain('82,00');
     expect(fixture.nativeElement.textContent).toContain('não confirma pagamento');
-    fixture.nativeElement.querySelector('button').click();
+    http.expectNone('/api/public/customer/orders/o1');
+  });
+  it('refreshes order and payment automatically without a manual update button', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T10:00:00Z'));
+    const fixture = TestBed.createComponent(OrderPageComponent);
+    http.expectOne('/api/public/customer/orders/o1').flush(order);
+    http.expectOne(pixUrl).flush(disabled); fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).not.toContain('Atualizar estado do pedido');
+    vi.advanceTimersByTime(20_000);
     http.expectOne('/api/public/customer/orders/o1').flush({ ...order, status: 'EXPIRED' });
     http.expectOne(pixUrl).flush(disabled);
     fixture.detectChanges();
@@ -68,6 +113,8 @@ describe('owned order details', () => {
     expect(fixture.nativeElement.querySelector('.field-error')).not.toBeNull();
   });
   it('generates Pix only when requested and shows the replacement deadline and provider status', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T10:00:00Z'));
     const fixture = TestBed.createComponent(OrderPageComponent);
     const root: HTMLElement = fixture.nativeElement;
     http.expectOne('/api/public/customer/orders/o1').flush(order);
@@ -83,11 +130,15 @@ describe('owned order details', () => {
     fixture.detectChanges();
     expect(root.querySelector<HTMLInputElement>('#pix-code')?.value).toBe('pix-test-code');
     expect(root.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,dGVzdA==');
-    click('Atualizar estado do pedido');
-    http.expectOne('/api/public/customer/orders/o1').flush(order);
+    expect(root.querySelector('.pix-amount')?.textContent).toContain('82,00');
+    expect(root.textContent).toContain('Modo de teste');
+    expect(root.querySelector('.pix-warning')).toBeNull();
+    vi.advanceTimersByTime(20_000);
+    http.expectOne('/api/public/customer/orders/o1').flush({ ...order, expiresAt: expiry });
     http.expectOne({ url: pixUrl, method: 'GET' }).flush({ enabled: true, status: 'PAID', expiresAt: expiry });
     fixture.detectChanges();
     expect(root.textContent).toContain('Pago');
+    expect(root.textContent).toContain('Pagamento confirmado pelo provedor');
     expect(root.querySelector('#pix-code')).toBeNull();
   });
 });

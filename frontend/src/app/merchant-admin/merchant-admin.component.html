@@ -12,6 +12,7 @@
         <ng-template #adminMenu><p>{{ store()?.name }}</p><nav aria-label="Administração">
           @for (link of [{id:'perfil',name:'Perfil e loja'}, {id:'categorias',name:'Categorias'}, {id:'produtos',name:'Produtos'}, {id:'pedidos',name:'Pedidos'}, {id:'entrega',name:'Entrega e retirada'}]; track link.id) {
             @if (busy()) { <span class="disabled-link">{{ link.name }}</span> }
+            @else if (link.id === 'pedidos') { <a routerLink="/painel/pedidos">Pedidos</a> }
             @else { <a appKeepScroll [routerLink]="['/painel', link.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ link.name }} <span>›</span></a> }
           }
         </nav>
@@ -21,7 +22,7 @@
               @else { <a appKeepScroll [routerLink]="['/painel', link.id]" routerLinkActive="active" ariaCurrentWhenActive="page">{{ link.name }} <small>Em breve</small></a> }
             }</nav>
           </details>
-          <a class="shop" routerLink="/">← Ver minha loja</a></ng-template>
+          </ng-template>
     @if (sameStore()) {
       <div class="layout">
         <aside><ng-container *ngTemplateOutlet="adminMenu" /></aside>
@@ -101,15 +102,6 @@
                     <div recordActions class="actions">@if (active()) { <button type="button" (click)="openProduct(item)" [disabled]="busy()">Editar</button> }<button type="button" (click)="toggle(item.id)" [disabled]="busy()">{{ active() ? 'Desativar' : 'Reativar' }}</button></div>
                   </app-record-card>
                 }
-              }
-            }
-          } @else if (section() === 'pedidos') {
-            <div class="title"><div><span class="overline">ACOMPANHAMENTO</span><h2>Pedidos</h2><p>Consulta de pedidos da sua loja. Pagamento e entrega ainda não são acompanhados nesta versão.</p></div></div>
-            @if (list(); as page) {
-              <p>{{ page.totalElements }} pedido(s) no total</p>
-              @if (!page.content.length) { <div class="empty">Nenhum pedido encontrado.</div> }
-              @for (raw of page.content; track raw.id) { @let order = asOrder(raw);
-                <app-record-card [staticCard]="true" [label]="'Pedido ' + order.id"><strong>{{ order.customerName }}</strong><p>Pedido {{ order.id }} · {{ order.createdAt | date:'dd/MM/yyyy' }}</p><p>{{ order.total | currency:'BRL':'symbol':'1.2-2':'pt-BR' }} · {{ order.status === 'PENDING' ? 'Pendente' : order.status === 'EXPIRED' ? 'Expirado' : order.status === 'CANCELLED' ? 'Cancelado' : order.status === 'PAID' ? 'Pago' : order.status === 'PAYMENT_REVIEW' ? 'Pagamento em revisão' : order.status }}</p></app-record-card>
               }
             }
           } @else {

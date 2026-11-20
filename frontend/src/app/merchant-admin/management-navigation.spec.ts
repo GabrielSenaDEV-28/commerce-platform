@@ -11,6 +11,7 @@ import { EditableRouteReuseStrategy } from '../editable-route-reuse.strategy';
 import { CategoryDetailsComponent } from './category-details.component';
 import { MerchantAdminComponent } from './merchant-admin.component';
 import { ProductDetailsComponent } from './product-details.component';
+import { MerchantOrdersComponent } from './merchant-orders.component';
 import { vi } from 'vitest';
 
 describe('management view after save', () => {
@@ -39,6 +40,25 @@ describe('management view after save', () => {
     input.value = value; input.dispatchEvent(new Event('input'));
   }
 
+  it('navigates from the account panel to standalone orders and their full-width details', async () => {
+    await harness.navigateByUrl('/painel/perfil', MerchantAdminComponent);
+    http.expectOne('/api/store/me').flush({ name: 'Loja', subdomain: 'loja' }); harness.detectChanges();
+    harness.routeNativeElement!.querySelector<HTMLAnchorElement>('aside a[href="/painel/pedidos"]')!.click();
+    await harness.fixture.whenStable();
+    expect(harness.routeDebugElement!.componentInstance).toBeInstanceOf(MerchantOrdersComponent);
+    http.expectOne(request => request.url === '/api/orders').flush({ content: [], page: 0, totalPages: 0, totalElements: 0 });
+    harness.detectChanges();
+    expect(harness.routeNativeElement!.querySelector('aside')).toBeNull();
+    expect(harness.routeNativeElement!.querySelector('main h1')!.textContent).toBe('Pedidos.');
+    http.expectNone('/api/store/me');
+    const id = '11111111-1111-4111-8111-111111111111';
+    await harness.navigateByUrl(`/painel/pedidos/${id}`, MerchantOrdersComponent);
+    http.expectOne(`/api/orders/${id}`).flush({}, { status: 404, statusText: 'Not Found' });
+    harness.detectChanges();
+    expect(harness.routeNativeElement!.querySelector('.breadcrumbs a[href="/painel/pedidos"]')).not.toBeNull();
+    expect(harness.routeNativeElement!.querySelector('a[appBack]')).toBeNull();
+    expect(harness.routeNativeElement!.querySelector('aside')).toBeNull();
+  });
   it('opens delivery settings on the merchant route and protects unsaved origin changes', async () => {
     const instance = await harness.navigateByUrl('/painel/entrega', MerchantAdminComponent);
     http.expectOne('/api/store/me').flush({ name: 'Loja', subdomain: 'loja' });

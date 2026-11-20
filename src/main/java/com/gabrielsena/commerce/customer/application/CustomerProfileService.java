@@ -3,6 +3,7 @@ package com.gabrielsena.commerce.customer.application;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -21,9 +22,14 @@ public class CustomerProfileService {
         this.jdbc = jdbc;
     }
 
-    public record Profile(String name, String email, String phone) { }
+    public record Profile(String name, String email, String phone, String cpf) { }
     public record ProfileRequest(@NotBlank @Size(max = 150) String name,
-                                 @NotBlank @Pattern(regexp = "[0-9]{10,11}") String phone) { }
+                                 @NotBlank @Pattern(regexp = "[0-9]{10,11}") String phone,
+                                 @NotBlank @Size(max = 32) String cpf) {
+        public ProfileRequest(String name, String phone) {
+            this(name, phone, null);
+        }
+    }
     public record AddressRequest(@NotBlank @Size(max = 150) String recipient,
                                  @NotBlank @Pattern(regexp = "[0-9]{8}") String postalCode,
                                  @NotBlank @Size(max = 150) String street,
@@ -38,14 +44,21 @@ public class CustomerProfileService {
     @Transactional(readOnly = true)
     public Profile profile(UUID store, UUID customer) {
         return jdbc.queryForObject("""
-                SELECT name, email, phone FROM customer_accounts WHERE store_id = ? AND customer_id = ?
-                """, (rs, row) -> new Profile(rs.getString(1), rs.getString(2), rs.getString(3)), store, customer);
+                SELECT name, email, phone, cpf FROM customer_accounts WHERE store_id = ? AND customer_id = ?
+                """, (rs, row) -> new Profile(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4)), store, customer);
     }
 
     @Transactional
     public Profile updateProfile(UUID store, UUID customer, ProfileRequest request) {
-        jdbc.update("UPDATE customer_accounts SET name = ?, phone = ? WHERE store_id = ? AND customer_id = ?",
-                request.name().strip(), request.phone(), store, customer);
+        String cpf = request.cpf() == null ? null : Cpf.normalize(request.cpf());
+        try {
+            jdbc.update("""
+                    UPDATE customer_accounts SET name = ?, phone = ?, cpf = COALESCE(?, cpf)
+                    WHERE store_id = ? AND customer_id = ?
+                    """, request.name().strip(), request.phone(), cpf, store, customer);
+        } catch (DuplicateKeyException exception) {
+            throw Cpf.alreadyInUse();
+        }
         return profile(store, customer);
     }
 
@@ -114,12 +127,18 @@ public class CustomerProfileService {
 
     public Profile lockCustomer(UUID store, UUID customer) {
         List<Profile> result = jdbc.query("""
-                SELECT name, email, phone FROM customer_accounts WHERE store_id = ? AND customer_id = ? FOR UPDATE
-                """, (rs, row) -> new Profile(rs.getString(1), rs.getString(2), rs.getString(3)), store, customer);
+                SELECT name, email, phone, cpf FROM customer_accounts WHERE store_id = ? AND customer_id = ? FOR UPDATE
+                """, (rs, row) -> new Profile(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4)), store, customer);
         if (result.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);
         }
         return result.getFirst();
+    }
+
+    public static boolean isCheckoutProfileComplete(Profile profile) {
+        return profile.name() != null && !profile.name().isBlank()
+                && profile.phone() != null && !profile.phone().isBlank()
+                && Cpf.isValid(profile.cpf());
     }
 
     private static Address address(java.sql.ResultSet rs) throws java.sql.SQLException {

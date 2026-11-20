@@ -1,5 +1,5 @@
 import { UI } from '../ui/ui';
-import { CurrencyPipe, DatePipe, DOCUMENT, NgTemplateOutlet } from '@angular/common';
+import { CurrencyPipe, DOCUMENT, NgTemplateOutlet } from '@angular/common';
 import { MobileMenuComponent } from '../ui/mobile-menu.component';
 import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
 import { Component, DestroyRef, inject, signal, viewChild } from '@angular/core';
@@ -18,12 +18,11 @@ import { DeliverySettingsComponent } from './delivery-settings.component';
 interface Page<T> { content: T[]; page: number; totalPages: number; totalElements: number }
 interface TypeItem { id: string; name: string; hasColor: boolean; hasSize: boolean; sizeFormat: 'LETTER' | 'NUMERIC' | null; active: boolean }
 interface Product { id: string; itemTypeId: string; sku: string; name: string; description: string; price: number; active: boolean }
-interface Order { id: string; customerName: string; status: string; createdAt: string; total: number }
 interface StoreInfo { name: string; subdomain: string }
 
 @Component({
   selector: 'app-merchant-admin',
-  imports: [...UI, ReactiveFormsModule, RouterLink, RouterLinkActive, CurrencyPipe, DatePipe, VariantOptionsComponent, CopyLinkComponent, NgTemplateOutlet, MobileMenuComponent, KeepScrollDirective, DeliverySettingsComponent],
+  imports: [...UI, ReactiveFormsModule, RouterLink, RouterLinkActive, CurrencyPipe, VariantOptionsComponent, CopyLinkComponent, NgTemplateOutlet, MobileMenuComponent, KeepScrollDirective, DeliverySettingsComponent],
   templateUrl: './merchant-admin.component.html',
   styleUrl: './merchant-admin.component.css',
 })
@@ -46,7 +45,7 @@ export class MerchantAdminComponent {
   protected readonly busy = signal(false);
   protected readonly error = signal('');
   protected readonly success = signal('');
-  protected readonly list = signal<Page<TypeItem | Product | Order> | null>(null);
+  protected readonly list = signal<Page<TypeItem | Product> | null>(null);
   protected readonly types = signal<TypeItem[]>([]);
   protected readonly options = signal<VariantOption[]>([]);
   protected readonly optionError = signal('');
@@ -85,7 +84,7 @@ export class MerchantAdminComponent {
           return;
         }
         if (this.sameStore()) this.route.paramMap.pipe(takeUntilDestroyed(this.destroy)).subscribe((params) => {
-          const section = params.get('section') ?? 'categorias';
+          const section = this.route.snapshot.data['section'] ?? params.get('section') ?? 'categorias';
           if (section !== this.section()) this.list.set(null);
           this.section.set(section);
           this.active.set(true); this.formOpen.set(false); this.error.set(''); this.success.set('');
@@ -123,12 +122,11 @@ export class MerchantAdminComponent {
   protected load(page: number): void {
     this.listRequest?.unsubscribe();
     const section = this.section();
-    if (!['categorias', 'produtos', 'pedidos'].includes(section)) { this.list.set(null); this.loading.set(false); return; }
+    if (!['categorias', 'produtos'].includes(section)) { this.list.set(null); this.loading.set(false); return; }
     this.loading.set(true); this.error.set('');
-    const path = section === 'categorias' ? '/api/item-types' : section === 'produtos' ? '/api/products' : '/api/orders';
-    const params: Record<string, string | number | boolean> = { page, size: 20 };
-    if (section !== 'pedidos') params['active'] = this.active();
-    this.listRequest = this.http.get<Page<TypeItem | Product | Order>>(path, { headers: this.headers(), params }).pipe(takeUntilDestroyed(this.destroy)).subscribe({
+    const path = section === 'categorias' ? '/api/item-types' : '/api/products';
+    const params = { page, size: 20, active: this.active() };
+    this.listRequest = this.http.get<Page<TypeItem | Product>>(path, { headers: this.headers(), params }).pipe(takeUntilDestroyed(this.destroy)).subscribe({
       next: (list) => { this.list.set(list); this.loading.set(false); },
       error: (error: unknown) => { this.loading.set(false); this.handleError(error); },
     });
@@ -240,7 +238,6 @@ export class MerchantAdminComponent {
       error: () => { this.busy.set(false); menu?.close(); },
     });
   }
-  protected asType(item: TypeItem | Product | Order): TypeItem { return item as TypeItem; }
-  protected asProduct(item: TypeItem | Product | Order): Product { return item as Product; }
-  protected asOrder(item: TypeItem | Product | Order): Order { return item as Order; }
+  protected asType(item: TypeItem | Product): TypeItem { return item as TypeItem; }
+  protected asProduct(item: TypeItem | Product): Product { return item as Product; }
 }

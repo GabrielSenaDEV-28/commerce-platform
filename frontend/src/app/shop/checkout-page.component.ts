@@ -9,10 +9,11 @@ import { UI } from '../ui/ui';
 import { CheckoutQuote, CreateOrder, PickupOption, ReservationItem } from './checkout.models';
 import { CustomerAddress, CustomerProfile } from '../customer-account/customer.models';
 import { CheckoutService, checkoutError } from './checkout.service';
+import { CheckoutExpiredDialogComponent } from '../ui/checkout-expired-dialog.component';
 
 @Component({
   selector: 'app-checkout-page',
-  imports: [...UI, RouterLink, CurrencyPipe, DatePipe],
+  imports: [...UI, RouterLink, CurrencyPipe, DatePipe, CheckoutExpiredDialogComponent],
   templateUrl: './checkout-page.component.html',
   styleUrls: ['./shop.css', './checkout.css'],
 })
@@ -24,6 +25,10 @@ export class CheckoutPageComponent {
   protected readonly loading = signal(false);
   protected readonly error = signal('');
   protected readonly profile = signal<CustomerProfile | null>(null);
+  protected readonly profileComplete = computed(() => {
+    const profile = this.profile();
+    return !!profile?.name?.trim() && !!profile.phone && !!profile.cpf;
+  });
   protected readonly addresses = signal<CustomerAddress[]>([]);
   protected readonly pickup = signal<PickupOption | null>(null);
   protected readonly fulfillment = signal<'DELIVERY' | 'PICKUP'>('DELIVERY');
@@ -46,6 +51,7 @@ export class CheckoutPageComponent {
   protected readonly submitted = signal(false);
   protected readonly cancelRequested = signal(false);
   protected readonly now = signal(Date.now());
+  protected readonly expiredNotice = signal(false);
   protected readonly active = computed(() => {
     const reservation = this.checkout.reservation();
     return reservation?.status === 'ACTIVE' && !!reservation.expiresAt && Date.parse(reservation.expiresAt) > this.now();
@@ -59,10 +65,19 @@ export class CheckoutPageComponent {
 
   constructor() {
     watchUnsavedChanges(this);
-    interval(1000).pipe(takeUntilDestroyed(this.destroy)).subscribe(() => this.now.set(Date.now()));
+    interval(1000).pipe(takeUntilDestroyed(this.destroy)).subscribe(() => {
+      const wasActive = this.active();
+      this.now.set(Date.now());
+      if (wasActive && !this.active() && !this.checkout.pending() && !this.checkout.order()) this.expiredNotice.set(true);
+    });
     this.load();
   }
   hasUnsavedChanges(): boolean { return false; }
+  protected acknowledgeExpiry(): void {
+    this.expiredNotice.set(false);
+    this.checkout.beginNext();
+    void this.router.navigateByUrl('/');
+  }
   hasUnconfirmedOperation(): boolean { return !!this.checkout.pending(); }
   isSaving(): boolean { return this.checkout.cart.busy() || this.loading(); }
   protected name(item: ReservationItem): string {
@@ -87,7 +102,7 @@ export class CheckoutPageComponent {
       });
   }
   protected start(): void {
-    if (this.isSaving() || this.checkout.pending()) return;
+    if (this.isSaving() || this.checkout.pending() || !this.profileComplete()) return;
     this.resetSelection(); this.partial.set(false); this.submitted.set(false);
     const ids = this.variantIds();
     this.run(this.checkout.start(ids.length ? ids : undefined).pipe(catchError((error: unknown) => {
@@ -160,7 +175,7 @@ export class CheckoutPageComponent {
     if (this.isSaving()) return;
     this.submitted.set(true);
     const pending = this.checkout.pending();
-    if (!pending && (!this.active() || this.reservationConflict() || !this.profile()?.phone || (this.partialRequired() && !this.partial())
+    if (!pending && (!this.active() || this.reservationConflict() || !this.profileComplete() || (this.partialRequired() && !this.partial())
       || (this.fulfillment() === 'PICKUP' ? !this.pickup()?.available
         : !this.selectedAddress() || !this.selectedService() || !this.quoteValid()))) return;
     const body: CreateOrder = pending?.body ?? {

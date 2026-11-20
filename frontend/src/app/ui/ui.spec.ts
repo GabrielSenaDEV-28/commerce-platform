@@ -20,6 +20,12 @@ import { applyServerFieldErrors } from './validation';
 })
 class UiExample { actions = 0; }
 
+@Component({
+  imports: [...UI],
+  template: `<button appBack type="button" aria-label="Voltar" (click)="back = true">Voltar</button>`,
+})
+class BackExample { back = false; }
+
 describe('shared UI', () => {
   beforeEach(() => TestBed.configureTestingModule({ providers: [provideRouter([])] }));
 
@@ -55,5 +61,14 @@ describe('shared UI', () => {
     expect(form.controls.name.hasError('server')).toBe(true);
     expect(applyServerFieldErrors(form, new HttpErrorResponse({ status: 400, error: { errors: ['unknown: inválido'] } }))).toBe(false);
     expect(applyServerFieldErrors(form, new HttpErrorResponse({ status: 503 }))).toBe(false);
+  });
+  it('renders a compact back icon without losing its accessible name or button action', () => {
+    const fixture = TestBed.createComponent(BackExample); fixture.detectChanges();
+    const button = fixture.nativeElement.querySelector('button') as HTMLButtonElement;
+    expect(button.classList.contains('ui-back')).toBe(true);
+    expect(button.getAttribute('aria-label')).toBe('Voltar');
+    expect(button.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+    button.click();
+    expect(fixture.componentInstance.back).toBe(true);
   });
 });

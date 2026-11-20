@@ -50,3 +50,24 @@ form small, .optional { color: #8b988d; font-size: .73rem; margin-top: 7px; }
 .success { color: #315d42; background: #ecf5eb; }
 @media (max-width: 720px) { .layout { grid-template-columns: 1fr; } .sidebar { display:none; } .panel { padding: 24px; } .crumb { margin-bottom: 28px; } .header { position:sticky; top:0; z-index:10; gap:8px; } .heading { display:none; } .back { font-size:.72rem; } }
 @media(max-width:480px) { .header { flex-wrap:nowrap; padding:8px 16px; }.back { display:grid; place-items:center; width:44px; height:44px; }.back-label { display:none; }.panel { padding:18px; }.wrap { width:calc(100% - 32px); } }
+.orders-page .layout { grid-template-columns:minmax(0,1fr); margin-top:24px; }
+.orders-page .panel { border:0; background:transparent; padding:0; }
+.orders-heading { display:flex; align-items:center; gap:18px; }
+.orders-heading h1 { font:400 clamp(2rem,5vw,3.4rem) Georgia,serif; margin:6px 0; letter-spacing:-.04em; }
+.orders-heading p { font-size:.85rem; color:#627568; }
+.customer-order { position:relative; display:flex; align-items:center; gap:20px; padding:24px; margin:14px 0; background:white; border:1px solid #e0e8df; border-radius:12px; transition:background .18s,border-color .18s; }
+.customer-order:hover, .customer-order:focus-within { background:#f8faf6; border-color:#a9c2ad; }
+.order-link { position:absolute; inset:0; z-index:1; border-radius:12px; }
+.order-badge { position:absolute; top:16px; right:16px; width:max-content; max-width:calc(100% - 32px); padding:5px 10px; border-radius:20px; background:#f2eddf; color:#6b5934; font-size:.7rem; font-weight:600; }
+.order-badge.paid { background:#edf5e9; color:#315d42; }
+.order-preview { width:88px; height:88px; flex-shrink:0; display:grid; overflow:hidden; border-radius:8px; background:#f0f4ed; gap:2px; }
+.order-preview.mosaic { grid-template-columns:repeat(2,minmax(0,1fr)); grid-auto-rows:1fr; }
+.order-preview.three > :first-child { grid-row:span 2; }
+.order-preview img { width:100%; height:100%; min-height:0; object-fit:cover; }
+.preview-placeholder { display:grid; place-items:center; min-height:0; color:#8da393; background:#edf2e9; }
+.preview-placeholder svg { width:24px; height:24px; stroke:currentColor; fill:none; stroke-width:1.4; stroke-linejoin:round; }
+.order-copy { min-width:0; padding-top:16px; }
+.order-reference { display:block; color:#294b40; font:400 1.1rem Georgia,serif; overflow-wrap:anywhere; }
+.order-copy p { margin:8px 0; color:#627568; font-size:.78rem; }
+.customer-order-total { display:block; font:400 1.35rem Georgia,serif; color:#294b40; }
+@media(max-width:540px) { .customer-order { padding:44px 16px 18px; gap:14px; } .order-preview { width:72px; height:72px; } .order-copy { padding:0; } .order-reference { font-size:.95rem; } .order-badge { top:12px; right:12px; } }

@@ -35,18 +35,19 @@ public class CustomerAuthController {
 
     public record Registration(@NotBlank @Size(max = 150) String name,
                                @NotBlank @Email @Size(max = 320) String email,
-                               @NotBlank @Size(min = 12, max = 128) String password) { }
+                               @NotBlank @Size(min = 12, max = 128) String password,
+                               @NotBlank @Size(max = 32) String cpf) { }
 
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<ProblemDetail> handleStatus(ResponseStatusException exception) {
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(exception.getStatusCode(), exception.getReason());
-        return ResponseEntity.status(exception.getStatusCode()).cacheControl(CacheControl.noStore()).body(problem);
+        return ResponseEntity.status(exception.getStatusCode()).cacheControl(CacheControl.noStore())
+                .body(exception.getBody());
     }
 
     @PostMapping("/register")
     public ResponseEntity<Customer> register(HttpServletRequest request, @Valid @RequestBody Registration body) {
         return ResponseEntity.status(HttpStatus.CREATED).cacheControl(CacheControl.noStore()).body(
-                auth.register(stores.resolve(request.getServerName()), body.name(), body.email(), body.password()));
+                auth.register(stores.resolve(request.getServerName()), body.name(), body.email(), body.password(), body.cpf()));
     }
 
     @PostMapping("/login")

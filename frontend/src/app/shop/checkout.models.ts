@@ -25,6 +25,8 @@ export interface Order {
   items: { productId: string; variantId: string; name: string; color: string | null; size: string | null; unitPrice: number; quantity: number }[];
   delivery: { phone: string; address: CustomerAddress; shipping: { serviceId: number; name: string; price: number; deliveryDays: number } | null } | null;
   pickup: { phone: string; address: PickupAddress; instructions: string | null; cost: number } | null;
+  customerCpf?: string | null;
+  deliveredAt?: string | null;
 }
 export interface PixPayment {
   enabled: boolean;

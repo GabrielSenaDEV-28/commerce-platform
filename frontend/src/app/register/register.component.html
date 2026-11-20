@@ -13,7 +13,7 @@
       @if (auth.accountKind()) {
         <h2 id="register-title">Você já está conectado</h2>
         <p>Encerre sua sessão antes de criar outra conta.</p>
-        <a [routerLink]="auth.accountKind() === 'merchant' ? '/painel/login' : '/entrar'">Voltar para a sessão</a>
+        <a appBack [routerLink]="auth.accountKind() === 'merchant' ? '/painel/login' : '/entrar'" aria-label="Voltar para a sessão" title="Voltar para a sessão">Voltar para a sessão</a>
       } @else if (complete()) {
         <h2 id="register-title">Cadastro concluído!</h2>
         <p>Sua conta foi criada. Entre com seu e-mail e senha para continuar.</p>
@@ -47,6 +47,12 @@
           <label for="email">E-mail</label>
           <input id="email" type="email" formControlName="email" autocomplete="email" [attr.aria-invalid]="form.controls.email.touched && form.controls.email.invalid" />
           @if (form.controls.email.touched && form.controls.email.invalid) { <span class="field-error">{{ form.controls.email.hasError('conflict') ? 'Este e-mail já pertence a uma conta nesta loja.' : 'Informe um e-mail válido.' }}</span> }
+          @if (!isMerchant()) {
+            <label for="cpf">CPF</label>
+            <input id="cpf" formControlName="cpf" inputmode="numeric" placeholder="000.000.000-00" required aria-describedby="cpf-help" [attr.aria-invalid]="form.controls.cpf.touched && form.controls.cpf.invalid" />
+            <span class="field-help" id="cpf-help">Informe os 11 dígitos, com ou sem pontuação.</span>
+            @if (form.controls.cpf.touched && form.controls.cpf.invalid) { <span class="field-error">{{ form.controls.cpf.hasError('conflict') ? 'Este CPF já pertence a uma conta nesta loja.' : 'Informe um CPF válido.' }}</span> }
+          }
           <label for="password">Senha</label>
           <input id="password" type="password" formControlName="password" autocomplete="new-password" [attr.aria-invalid]="form.controls.password.touched && form.controls.password.invalid" aria-describedby="password-help" />
           <span class="field-help" id="password-help">Use de 12 a 128 caracteres.</span>

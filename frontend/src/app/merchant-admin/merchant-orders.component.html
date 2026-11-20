@@ -1,0 +1,69 @@
+<main class="shop-wrap orders-workspace">
+<nav class="breadcrumbs" aria-label="Navegação estrutural">
+  <a routerLink="/">Início</a><span>/</span><a routerLink="/painel/perfil">Administração</a><span>/</span>
+  @if (id) { <a routerLink="/painel/pedidos" queryParamsHandling="preserve">Pedidos</a><span>/</span><span aria-current="page">Detalhes do pedido</span> }
+  @else { <span aria-current="page">Pedidos</span> }
+</nav>
+@if (id) {
+  <div class="heading detail-heading"><div><span class="overline">ACOMPANHAMENTO</span><h1>Detalhes do pedido.</h1></div>
+    @if (order(); as info) { <div class="order-total" aria-label="Total do pedido"><span>Total do pedido</span><strong>{{ info.total | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</strong><small>{{ info.fulfillmentType === 'PICKUP' ? 'Retirada gratuita' : 'Frete incluído no total' }}</small></div> }
+  </div>
+} @else {
+  <div class="heading"><div><span class="overline">OPERAÇÃO DA LOJA</span><h1>Pedidos.</h1><p>Vendas, pagamentos e retiradas, em um só lugar.</p></div></div>
+}
+@if (error()) { <p class="field-error" role="alert">{{ error() }}</p><button type="button" [disabled]="loading() || busy()" (click)="id ? loadDetails() : load()">Tentar novamente</button> }
+@if (loading()) { <p role="status">Consultando pedidos...</p> }
+@if (!id) {
+  <form [formGroup]="filters" (submit)="$event.preventDefault()">
+    <fieldset><legend>Filtrar pedidos · horário de Brasília</legend><div class="filters">
+      <label>Data inicial<input type="date" formControlName="startDate" /></label>
+      <label>Data final<input type="date" formControlName="endDate" /></label>
+      <label>Status<select formControlName="status"><option value="">Todos</option><option value="PENDING">Aguardando pagamento</option><option value="PAID">Pago</option><option value="DELIVERED">Entregue</option><option value="CANCELLED">Cancelado</option><option value="PAYMENT_REVIEW">Pagamento em revisão</option></select></label>
+      <label>Recebimento<select formControlName="fulfillmentType"><option value="">Todos</option><option value="PICKUP">Retirada na loja</option><option value="DELIVERY">Entrega no endereço</option></select></label>
+      <label>CPF do cliente<input formControlName="cpf" inputmode="numeric" maxlength="14" placeholder="000.000.000-00" autocomplete="off" /></label>
+      <label>Número do pedido<input formControlName="orderId" placeholder="Identificador completo" /></label>
+    </div><div class="filter-footer"><span>Filtros atualizados automaticamente</span><button type="button" (click)="clear()">Limpar filtros</button></div></fieldset>
+  </form>
+  @if (page(); as result) {
+    <p class="count" aria-live="polite"><strong>{{ result.totalElements }}</strong> {{ result.totalElements === 1 ? 'pedido encontrado' : 'pedidos encontrados' }}</p>
+    <div class="table-wrap" [attr.aria-busy]="loading()"><table><caption class="sr-only">Pedidos da loja conforme os filtros aplicados</caption>
+      <thead><tr><th>Pedido / data</th><th>Cliente</th><th>Status</th><th>Recebimento</th><th class="amount">Total</th><th>Detalhes</th></tr></thead>
+      <tbody>@for (item of result.content; track item.id) {
+        <tr (click)="openOrder($event, item.id)"><td><a [routerLink]="['/painel/pedidos', item.id]" queryParamsHandling="preserve">{{ item.id }}</a><small>{{ item.createdAt | date:'dd/MM/yyyy HH:mm':'-0300' }}</small></td>
+          <td>{{ item.customerName }}<small>{{ item.customerEmail }}</small></td>
+          <td><span class="status" [class.paid]="item.status === 'PAID' || item.status === 'DELIVERED'">{{ status(item.status) }}</span></td>
+          <td>{{ item.fulfillmentType === 'PICKUP' ? 'Retirada na loja' : 'Entrega' }}</td>
+          <td class="amount">{{ item.total | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</td>
+          <td><a [routerLink]="['/painel/pedidos', item.id]" queryParamsHandling="preserve" [attr.aria-label]="'Ver pedido de ' + item.customerName">Ver pedido →</a></td></tr>
+      } @empty { <tr><td colspan="6">Nenhum pedido corresponde aos filtros.</td></tr> }</tbody>
+    </table></div>
+    @if (result.totalElements) {
+      <nav class="orders-pagination" aria-label="Paginação dos pedidos">
+        <span class="range"><strong>{{ result.page * 50 + 1 }}–{{ result.page * 50 + result.content.length }}</strong> de {{ result.totalElements }} {{ result.totalElements === 1 ? 'pedido' : 'pedidos' }}</span>
+        @if (result.totalPages > 1) { <div class="page-controls"><button type="button" aria-label="Página anterior" [disabled]="loading() || result.page === 0" (click)="paginate(result.page - 1)">‹</button><span class="page-number" aria-current="page" [attr.aria-label]="'Página ' + (result.page + 1)">{{ result.page + 1 }}</span><button type="button" aria-label="Próxima página" [disabled]="loading() || result.page + 1 >= result.totalPages" (click)="paginate(result.page + 1)">›</button></div> }
+      </nav>
+    }
+  }
+} @else if (order(); as info) {
+  <div class="order-meta"><p class="identifier">{{ info.id }}</p><span class="status" [class.paid]="info.status === 'PAID' || info.status === 'DELIVERED'">{{ status(info.status) }}</span>
+    <p>Criado em {{ info.createdAt | date:'dd/MM/yyyy HH:mm':'-0300' }} · prazo de pagamento {{ info.expiresAt | date:'dd/MM/yyyy HH:mm':'-0300' }}</p>
+    @if (info.deliveredAt) { <p>Retirada confirmada em {{ info.deliveredAt | date:'dd/MM/yyyy HH:mm':'-0300' }}.</p> }
+  </div>
+  <div class="detail-grid"><section><h3>Cliente</h3><p>{{ info.customerName }}</p><p>{{ info.customerEmail }}</p><p>CPF: {{ info.customerCpf || 'Não registrado neste pedido antigo' }}</p></section>
+    <section><h3>{{ info.fulfillmentType === 'PICKUP' ? 'Retirada na loja' : 'Entrega' }}</h3>
+      @if (info.delivery; as delivery) { <p>{{ delivery.address.recipient }} · {{ delivery.phone }}</p><p>{{ delivery.address.street }}, {{ delivery.address.number }} {{ delivery.address.complement }}</p><p>{{ delivery.address.district }} · {{ delivery.address.city }}/{{ delivery.address.state }} · CEP {{ delivery.address.postalCode }}</p>
+        @if (delivery.shipping; as shipping) { <p>{{ shipping.name }} · {{ shipping.price | currency:'BRL':'symbol':'1.2-2':'pt-BR' }} · {{ shipping.deliveryDays }} dia(s)</p> }
+      }
+      @if (info.pickup; as pickup) { <p>{{ pickup.phone }}</p><p>{{ pickup.address.street }}, {{ pickup.address.number }} {{ pickup.address.complement }}</p><p>{{ pickup.address.city }}/{{ pickup.address.state }} · CEP {{ pickup.address.postalCode }}</p><p>{{ pickup.instructions }}</p> }
+    </section></div>
+  <div class="table-wrap"><table><caption>Itens do pedido</caption><thead><tr><th>Produto</th><th>Quantidade</th><th>Valor unitário</th><th>Subtotal</th></tr></thead><tbody>
+    @for (item of info.items; track item.variantId) { <tr><td>{{ item.name }}<small>{{ item.color }} {{ item.size }}</small></td><td>{{ item.quantity }}</td><td>{{ item.unitPrice | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</td><td>{{ item.unitPrice * item.quantity | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</td></tr> }
+  </tbody></table></div>
+  @if (info.fulfillmentType === 'PICKUP' && info.status === 'PAID') {
+    <section class="fulfillment"><h3>Confirmar retirada</h3><p>Confira o cliente e entregue os produtos antes de confirmar. Esta ação registra o responsável e a data, sem cobrar ou baixar estoque novamente.</p>
+      @if (!confirmDelivery()) { <button class="primary" type="button" (click)="confirmDelivery.set(true)" [disabled]="busy() || loading() || !!error()">Confirmar entrega ao cliente</button> }
+      @else { <p>Confirma que todos os produtos deste pedido foram retirados pelo cliente?</p><div class="actions"><button class="primary" type="button" (click)="deliver()" [disabled]="busy() || loading()">Sim, pedido entregue</button><button appBack type="button" aria-label="Voltar" title="Voltar" (click)="confirmDelivery.set(false)" [disabled]="busy()">Voltar</button></div> }
+    </section>
+  } @else if (info.status === 'PENDING' || info.status === 'PAYMENT_REVIEW') { <p>Não libere produtos antes da confirmação do pagamento.</p> }
+}
+</main>

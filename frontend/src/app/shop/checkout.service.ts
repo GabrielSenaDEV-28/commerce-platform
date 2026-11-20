@@ -86,6 +86,7 @@ export class CheckoutService {
 
 export function checkoutError(error: unknown): string {
   if (error instanceof HttpErrorResponse) {
+    if (error.error?.code === 'CUSTOMER_PROFILE_INCOMPLETE') return 'Complete seu nome, telefone e CPF no perfil antes de confirmar a compra.';
     if (error.error?.code === 'ITEMS_NOT_QUOTABLE') return 'Um ou mais itens não podem ser enviados. Consulte a loja sobre as medidas de envio ou escolha retirada, se disponível.';
     if (error.error?.code === 'SHIPPING_TEMPORARILY_UNAVAILABLE') return 'O serviço de frete está temporariamente indisponível. Tente consultar o resultado novamente mais tarde.';
     if (error.status === 401) return 'Sua sessão expirou. Entre novamente para continuar.';

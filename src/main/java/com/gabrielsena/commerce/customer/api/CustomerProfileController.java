@@ -1,6 +1,7 @@
 package com.gabrielsena.commerce.customer.api;
 
 import com.gabrielsena.commerce.customer.application.CustomerAuthService;
+import com.gabrielsena.commerce.customer.application.Cpf;
 import com.gabrielsena.commerce.customer.application.CustomerProfileService;
 import com.gabrielsena.commerce.customer.application.CustomerProfileService.Address;
 import com.gabrielsena.commerce.customer.application.CustomerProfileService.AddressRequest;
@@ -11,10 +12,12 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -37,6 +40,12 @@ public class CustomerProfileController {
         this.profiles = profiles;
         this.auth = auth;
         this.stores = stores;
+    }
+
+    @ExceptionHandler(Cpf.Problem.class)
+    public ResponseEntity<ProblemDetail> handleCpfProblem(Cpf.Problem exception) {
+        return ResponseEntity.status(exception.getStatusCode()).cacheControl(CacheControl.noStore())
+                .body(exception.getBody());
     }
 
     @GetMapping("/profile")

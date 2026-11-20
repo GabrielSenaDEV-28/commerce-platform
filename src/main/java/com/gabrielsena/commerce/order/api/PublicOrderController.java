@@ -88,6 +88,12 @@ public class PublicOrderController {
                 .body(new ItemErrors("ITEMS_NOT_QUOTABLE", exception.items()));
     }
 
+    @ExceptionHandler(OrderService.IncompleteProfile.class)
+    public ResponseEntity<ProviderError> incompleteProfile(OrderService.IncompleteProfile exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).cacheControl(CacheControl.noStore())
+                .body(new ProviderError("CUSTOMER_PROFILE_INCOMPLETE"));
+    }
+
     @GetMapping("/api/public/orders/{orderId}")
     public ResponseEntity<Order> get(HttpServletRequest request,
             @RequestHeader(value = "Cart-Token", required = false) String token, @PathVariable UUID orderId) {
